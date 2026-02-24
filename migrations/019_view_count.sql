@@ -1,0 +1,3 @@
+-- 019: view_count fallback (no-op; view_count zaten 014'te ekleniyor)
+-- Production DB'de view_count mevcut; bu migration sadece wrangler kaydı için no-op.
+-- Fresh deploy'larda 014 zaten view_count ekliyor.

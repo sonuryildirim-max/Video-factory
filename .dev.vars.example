@@ -1,0 +1,35 @@
+# Copy to .dev.vars and fill in your values
+# .dev.vars is GITIGNORED — NEVER commit real credentials to GitHub
+#
+#   cp .dev.vars.example .dev.vars
+#   (edit .dev.vars with your real values — .dev.vars stays local)
+
+# Agent / Worker auth (same token for agent and worker API)
+BK_BEARER_TOKEN=
+HETNER_API_KEY=
+HETNER_IP_WHITELIST_ENABLED=0
+
+# R2 Presigned URL — Cloudflare Dashboard → R2 → Manage R2 API Tokens
+# Create token → Object Read & Write → Copy Access Key ID, Secret Access Key, Account ID
+# For production: wrangler secret put R2_ACCOUNT_ID (do not put R2_ACCOUNT_ID in wrangler.toml)
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+
+# Samaritan — Edge Alert (500), DMS (LOSS OF SIGNAL), Agent ping auth
+TELEGRAM_TOKEN=
+TELEGRAM_CHAT_ID=
+SAMARITAN_SECRET=
+
+# Shadow channel — when Telegram API fails, alerts are sent here (e.g. Discord webhook)
+# FALLBACK_WEBHOOK_URL=https://discord.com/api/webhooks/...
+# DISCORD_WEBHOOK_URL=  (alias for FALLBACK_WEBHOOK_URL)
+
+# Agent (optional) — RAM thresholds, CRF, thumbnail, recovery
+# RAM_WARNING_GB=28
+# RAM_CRITICAL_GB=31.5
+# AUTO_RESUME_INTERRUPTED=0
+# FFMPEG_CRF_ULTRA=16
+# FFMPEG_CRF_DENGELI=18
+# FFMPEG_CRF_KUCUK_DOSYA=24
+# THUMBNAIL_SCALE=360:-2

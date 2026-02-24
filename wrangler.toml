@@ -1,0 +1,51 @@
+name = "bk-video-factory-prod"
+main = "src/index.js"
+compatibility_date = "2024-05-02"
+workers_dev = false
+
+# Production (v.bilgekarga.tr) — default env; /* catches all paths
+[[routes]]
+pattern = "v.bilgekarga.tr/*"
+custom_domain = true
+
+[triggers]
+crons = ["0 2 * * *", "*/10 * * * *", "*/15 * * * *"]
+
+[vars]
+ENVIRONMENT = "production"
+HETNER_IP_WHITELIST_ENABLED = "0"
+CDN_BASE_URL = "https://cdn.bilgekarga.tr"
+# Samaritan: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SAMARITAN_SECRET via env (wrangler secret put)
+# R2_ACCOUNT_ID: set via wrangler secret put R2_ACCOUNT_ID (do not commit plaintext)
+R2_PUBLIC_URL = "https://cdn.bilgekarga.tr"
+R2_RAW_PUBLIC_URL = "https://cdn.bilgekarga.tr/raw"
+R2_RAW_BUCKET_NAME = "bk-video-raw"
+R2_PUBLIC_BUCKET_NAME = "bk-video-public"
+AGENT_WAKE_URL = "http://agent.bilgekarga.tr:8080/wakeup"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bk-video-db"
+database_id = "94d423ed-e1c1-49c3-b903-d9c111a87a8e"
+migrations_dir = "./migrations"
+
+[[r2_buckets]]
+binding = "R2_RAW_UPLOADS_BUCKET"
+bucket_name = "bk-video-raw"
+
+[[r2_buckets]]
+binding = "R2_PUBLIC_BUCKET"
+bucket_name = "bk-video-public"
+
+[[r2_buckets]]
+binding = "R2_DELETED_BUCKET"
+bucket_name = "bk-video-deleted"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Staging (workers.dev) — wrangler deploy --env staging
+[env.staging]
+name = "bk-video-factory-staging"
+workers_dev = true

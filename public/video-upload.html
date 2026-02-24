@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png"
+        href="https://static.ticimax.cloud/31817/uploads/editoruploads/bilgekarga-image/bilge-karga.png">
+    <title>Video Yükle — Bilge Karga</title>
+    <script>
+        (function () {
+            var t = localStorage.getItem('bk_theme');
+            if (!t) t = typeof window.matchMedia !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
+    <style>
+        :root {
+            --bg: #000000
+        }
+
+        [data-theme="light"] {
+            --bg: #f4f4f5
+        }
+
+        html,
+        body {
+            background: var(--bg)
+        }
+    </style>
+    <style>
+        /* ─── Theme variables ─────────────────────────────────────────────── */
+        [data-theme="dark"],
+        :root {
+            --bg: #000000;
+            --surface: rgba(15, 15, 18, 0.7);
+            --surface-hover: rgba(30, 30, 35, 0.8);
+            --border: rgba(0, 255, 255, 0.15);
+            --border-strong: rgba(0, 255, 255, 0.25);
+            --text: #f4f4f5;
+            --text-2: #d4d4d8;
+            --text-muted: #a1a1aa;
+            --text-subtle: #71717a;
+            --radius: 6px;
+            --radius-sm: 4px;
+            --nav-h: 52px;
+            --nav-bg: rgba(10, 10, 12, 0.85);
+            --neon-cyan: #00ffff;
+            --neon-emerald: #10b981;
+            --btn-primary-fg: #000000;
+            --danger: #f87171;
+        }
+
+        [data-theme="light"] {
+            --bg: #f4f4f5;
+            --surface: #ffffff;
+            --surface-hover: #fafafa;
+            --border: #e4e4e7;
+            --border-strong: #d4d4d8;
+            --text: #09090b;
+            --text-2: #3f3f46;
+            --text-muted: #71717a;
+            --text-subtle: #a1a1aa;
+            --nav-bg: rgba(255, 255, 255, 0.9);
+            --neon-cyan: #0891b2;
+            --neon-emerald: #059669;
+            --btn-primary-fg: #ffffff;
+            --danger: #dc2626;
+        }
+
+        *,
+        *::before,
+        *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13.5px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+        }
+
+        /* Nav */
+        .nav {
+            height: var(--nav-h);
+            background: var(--nav-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.01em;
+        }
+
+        .nav-brand-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--neon-cyan);
+            box-shadow: 0 0 10px var(--neon-cyan);
+            border-radius: 50%;
+        }
+
+        .nav-divider {
+            width: 1px;
+            height: 16px;
+            background: var(--border);
+            margin: 0 16px;
+        }
+
+        .nav-link {
+            font-size: 13.5px;
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 0 4px;
+            transition: color .15s;
+        }
+
+        .nav-link:hover {
+            color: var(--border-strong);
+        }
+
+        .nav-link.active {
+            color: var(--neon-cyan);
+            font-weight: 500;
+        }
+
+        .nav-spacer {
+            flex: 1;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-actions .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 12px;
+            height: 32px;
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all .12s;
+            font-family: inherit;
+        }
+
+        .nav-actions .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: var(--border);
+        }
+
+        .nav-actions .btn-ghost:hover {
+            background: var(--surface-hover);
+            color: var(--text);
+            border-color: var(--border-strong);
+        }
+
+        .nav-back {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 13px;
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 4px 8px;
+            border-radius: var(--radius-sm);
+            transition: all .12s;
+        }
+
+        .nav-back:hover {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        /* Layout */
+        .page-wrap {
+            min-height: calc(100vh - var(--nav-h));
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 32px 24px 64px;
+        }
+
+        .upload-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            width: 100%;
+            max-width: 720px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 20px 24px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .card-body {
+            padding: 20px 24px;
+        }
+
+        /* Mode tabs */
+        .mode-tabs {
+            display: flex;
+            gap: 2px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 3px;
+            margin-bottom: 20px;
+        }
+
+        .mode-tab {
+            flex: 1;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            border: none;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 12.5px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all .12s;
+        }
+
+        .mode-tab.active {
+            background: var(--surface);
+            color: var(--text);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+        }
+
+        .mode-tab svg {
+            flex-shrink: 0;
+        }
+
+        /* Mode panels */
+        .mode-panel {
+            display: none;
+        }
+
+        .mode-panel.active {
+            display: block;
+        }
+
+        /* Drop zone */
+        .upload-area {
+            border: 1.5px dashed var(--border-strong);
+            border-radius: var(--radius);
+            padding: 32px 20px;
+            text-align: center;
+            cursor: pointer;
+            background: var(--surface-hover);
+            transition: all .15s;
+            margin-bottom: 16px;
+        }
+
+        .upload-area:hover,
+        .upload-area.dragover {
+            border-color: var(--text);
+            background: var(--bg);
+        }
+
+        .upload-area-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 12px;
+            color: var(--text-muted);
+        }
+
+        .upload-area-title {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--text);
+            margin-bottom: 3px;
+        }
+
+        .upload-area-hint {
+            font-size: 11.5px;
+            color: var(--text-subtle);
+            margin-bottom: 14px;
+        }
+
+        .browse-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 28px;
+            padding: 0 10px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all .12s;
+        }
+
+        .browse-btn:hover {
+            border-color: var(--text-muted);
+            color: var(--text);
+        }
+
+        /* URL input panel */
+        .url-input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .url-input-row input {
+            flex: 1;
+            height: 34px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-family: inherit;
+            color: var(--text);
+            background: var(--surface);
+            outline: none;
+            transition: border-color .15s;
+        }
+
+        .url-input-row input:focus {
+            border-color: var(--border-strong);
+        }
+
+        .url-input-row input::placeholder {
+            color: var(--text-subtle);
+        }
+
+        .url-platform-hint {
+            font-size: 11.5px;
+            color: var(--text-subtle);
+            min-height: 18px;
+            margin-top: -10px;
+            margin-bottom: 16px;
+        }
+
+        /* File info */
+        .file-info {
+            display: none;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 14px;
+            margin-bottom: 16px;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-info-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            color: var(--text-subtle);
+            margin-bottom: 8px;
+        }
+
+        .file-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 8px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .detail-label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-subtle);
+        }
+
+        .detail-value {
+            font-size: 12.5px;
+            font-weight: 500;
+            color: var(--text-2);
+            word-break: break-all;
+        }
+
+        /* Divider */
+        .section-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 16px 0;
+        }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            color: var(--text-subtle);
+            margin-bottom: 8px;
+        }
+
+        /* Preset buttons */
+        .preset-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .preset-btn {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1.5px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            text-align: left;
+            cursor: pointer;
+            transition: all .12s;
+            font-family: inherit;
+        }
+
+        .preset-btn:hover {
+            border-color: var(--border-strong);
+        }
+
+        .preset-btn.active {
+            border-color: var(--text);
+        }
+
+        .preset-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-2);
+            margin-bottom: 1px;
+        }
+
+        .preset-desc {
+            font-size: 11px;
+            color: var(--text-subtle);
+        }
+
+        .preset-btn.active .preset-name {
+            color: var(--text);
+        }
+
+        /* Form fields */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-group.span-2 {
+            grid-column: 1/-1;
+        }
+
+        .form-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .input-field,
+        textarea.input-field {
+            width: 100%;
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-family: inherit;
+            color: var(--text);
+            background: var(--surface);
+            outline: none;
+            transition: border-color .15s;
+            resize: vertical;
+        }
+
+        .input-field:focus {
+            border-color: var(--border-strong);
+        }
+
+        .input-field::placeholder {
+            color: var(--text-subtle);
+        }
+
+        /* ─── Queue ─────────────────────────────────────────────────────── */
+        .queue-section {
+            display: none;
+            margin-top: 4px;
+        }
+
+        .queue-section.visible {
+            display: block;
+        }
+
+        .queue-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .queue-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            color: var(--text-subtle);
+        }
+
+        .queue-summary-text {
+            font-size: 11.5px;
+            color: var(--text-muted);
+        }
+
+        .queue-list {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            margin-bottom: 10px;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+
+        .queue-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 12.5px;
+        }
+
+        .queue-item:last-child {
+            border-bottom: none;
+        }
+
+        .queue-item-icon {
+            color: var(--text-subtle);
+            flex-shrink: 0;
+        }
+
+        .queue-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .queue-item-name {
+            font-weight: 500;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .queue-item-meta {
+            font-size: 11px;
+            color: var(--text-subtle);
+        }
+
+        .queue-item-progress {
+            width: 80px;
+            flex-shrink: 0;
+        }
+
+        .queue-progress-bar {
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 2px;
+        }
+
+        .queue-progress-fill {
+            height: 100%;
+            background: var(--text);
+            border-radius: 2px;
+            width: 0%;
+            transition: width .2s ease;
+        }
+
+        .queue-progress-fill.done {
+            background: #16a34a;
+        }
+
+        .queue-progress-fill.error {
+            background: #ef4444;
+        }
+
+        .queue-progress-fill.animate {
+            animation: qpulse 1.2s ease infinite;
+        }
+
+        @keyframes qpulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: .55;
+            }
+        }
+
+        .queue-item-phase {
+            font-size: 10.5px;
+            color: var(--text-subtle);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .queue-item-metrics {
+            font-size: 10px;
+            color: var(--text-subtle);
+            margin-top: 2px;
+        }
+
+        .queue-item-status {
+            flex-shrink: 0;
+            font-size: 11px;
+            font-weight: 500;
+            padding: 2px 7px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .qs-waiting {
+            background: var(--bg);
+            color: var(--text-subtle);
+            border: 1px solid var(--border);
+        }
+
+        .qs-uploading {
+            background: var(--bg);
+            color: var(--text-2);
+            border: 1px solid var(--border-strong);
+        }
+
+        .qs-done {
+            background: #f0fdf4;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
+
+        .qs-error {
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        .queue-item-remove {
+            background: none;
+            border: none;
+            color: var(--text-subtle);
+            cursor: pointer;
+            padding: 2px;
+            border-radius: 3px;
+            line-height: 1;
+            flex-shrink: 0;
+            transition: color .1s;
+        }
+
+        .queue-item-remove:hover {
+            color: #dc2626;
+        }
+
+        .queue-item-remove:disabled {
+            pointer-events: none;
+            opacity: .4;
+        }
+
+        /* Progress (single file) */
+        .progress-container {
+            display: none;
+            margin-bottom: 16px;
+        }
+
+        .progress-container.show {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .progress-bar {
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--text);
+            border-radius: 2px;
+            width: 0%;
+            transition: width .25s ease;
+        }
+
+        .progress-metrics {
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-subtle);
+        }
+
+        /* Actions */
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding-top: 4px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 14px;
+            height: 34px;
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all .12s;
+            font-family: inherit;
+        }
+
+        .btn-primary {
+            background: var(--neon-cyan);
+            color: var(--btn-primary-fg);
+            border-color: var(--neon-cyan);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--neon-emerald);
+            border-color: var(--neon-emerald);
+            color: var(--btn-primary-fg);
+        }
+
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text-muted);
+            border-color: var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--border-strong);
+            color: var(--text);
+        }
+
+        .btn:disabled {
+            opacity: .4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        /* Result */
+        .result-container {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            margin-top: 16px;
+        }
+
+        .result-container.show {
+            display: block;
+        }
+
+        .result-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .result-icon-wrap {
+            width: 28px;
+            height: 28px;
+            background: var(--surface-hover);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--neon-emerald);
+            flex-shrink: 0;
+        }
+
+        .result-title {
+            font-size: 13.5px;
+            font-weight: 600;
+        }
+
+        .result-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .result-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .result-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .video-preview {
+            grid-column: 1/-1;
+        }
+
+        .video-preview h4 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .preview-placeholder {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-subtle);
+            font-size: 12px;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11.5px;
+            font-weight: 500;
+        }
+
+        .status-badge::before {
+            content: '';
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .status-uploaded {
+            background: var(--surface-hover);
+            color: var(--neon-cyan);
+        }
+
+        .status-uploaded::before {
+            background: var(--neon-cyan);
+        }
+
+        .status-processing {
+            background: var(--surface-hover);
+            color: var(--text-2);
+        }
+
+        .status-processing::before {
+            background: #ca8a04;
+        }
+
+        .status-completed {
+            background: var(--surface-hover);
+            color: var(--neon-emerald);
+        }
+
+        .status-completed::before {
+            background: var(--neon-emerald);
+        }
+
+        .status-failed {
+            background: var(--surface-hover);
+            color: var(--danger);
+        }
+
+        .status-failed::before {
+            background: var(--danger);
+        }
+
+        .status-timeout {
+            background: var(--bg);
+            color: var(--text-muted);
+        }
+
+        .status-timeout::before {
+            background: var(--text-subtle);
+        }
+
+        @media (max-width: 560px) {
+            .page-wrap {
+                padding: 16px 16px 48px;
+            }
+
+            .card-body {
+                padding: 16px;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .result-content {
+                grid-template-columns: 1fr;
+            }
+
+            .preset-buttons {
+                flex-direction: column;
+            }
+
+            .queue-item-progress {
+                width: 60px;
+            }
+        }
+
+        /* Auth gate: hide panel until auth verified */
+        html.bk-auth-pending body {
+            visibility: hidden;
+        }
+    </style>
+</head>
+
+<body>
+    <script>
+        (function () {
+            document.documentElement.classList.add('bk-auth-pending');
+        })();
+    </script>
+
+    <!-- SVG sprite -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+        <symbol id="u-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+            <polyline points="14 2 14 8 20 8" />
+        </symbol>
+        <symbol id="u-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        </symbol>
+        <symbol id="u-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+        </symbol>
+        <symbol id="u-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+        </symbol>
+        <symbol id="u-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+            stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+        </symbol>
+        <symbol id="u-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+            stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+        </symbol>
+        <symbol id="u-chevron-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+        </symbol>
+        <symbol id="u-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+        </symbol>
+        <symbol id="u-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="2" />
+            <line x1="7" y1="2" x2="7" y2="22" />
+            <line x1="17" y1="2" x2="17" y2="22" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+        </symbol>
+        <symbol id="u-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+        </symbol>
+        <symbol id="u-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5" />
+            <line x1="12" y1="1" x2="12" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="23" />
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+            <line x1="1" y1="12" x2="3" y2="12" />
+            <line x1="21" y1="12" x2="23" y2="12" />
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </symbol>
+        <symbol id="u-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </symbol>
+    </svg>
+
+    <!-- Nav (matches video-dashboard.html) -->
+    <nav class="nav">
+        <a href="video-dashboard.html" class="nav-brand">
+            <span class="nav-brand-dot"></span>
+            BilgeKarga Video Factory
+        </a>
+        <div class="nav-divider"></div>
+        <div class="nav-links">
+            <a href="video-dashboard.html" class="nav-link">Videolar</a>
+            <a href="#" class="nav-link active">Video Yükle</a>
+        </div>
+        <div class="nav-spacer"></div>
+        <div class="nav-actions">
+            <button class="btn btn-ghost" type="button" onclick="toggleTheme()" aria-label="Tema değiştir"
+                title="Açık/Koyu mod">
+                <svg width="14" height="14">
+                    <use id="themeIconUse" href="#u-sun" />
+                </svg>
+            </button>
+            <a href="video-dashboard.html" class="btn btn-ghost" style="text-decoration:none">
+                <svg width="14" height="14">
+                    <use href="#u-chevron-left" />
+                </svg>
+                Dashboard
+            </a>
+        </div>
+    </nav>
+
+    <div class="page-wrap">
+        <div class="upload-card">
+
+            <div class="card-header">
+                <div class="card-title">Video Yükle</div>
+                <div class="card-subtitle">Türkçe karakterler otomatik normalize edilir · Maks. 5 GB</div>
+            </div>
+
+            <div class="card-body">
+
+                <!-- Mode tabs -->
+                <div class="mode-tabs" role="tablist">
+                    <button class="mode-tab active" data-mode="file" role="tab">
+                        <svg width="13" height="13">
+                            <use href="#u-file" />
+                        </svg> Dosya
+                    </button>
+                    <button class="mode-tab" data-mode="folder" role="tab">
+                        <svg width="13" height="13">
+                            <use href="#u-folder" />
+                        </svg> Klasör
+                    </button>
+                    <button class="mode-tab" data-mode="url" role="tab">
+                        <svg width="13" height="13">
+                            <use href="#u-link" />
+                        </svg> URL
+                    </button>
+                </div>
+
+                <!-- ── FILE mode ── -->
+                <div class="mode-panel active" id="panel-file">
+                    <div class="upload-area" id="uploadArea" role="button" tabindex="0">
+                        <div class="upload-area-icon">
+                            <svg width="16" height="16">
+                                <use href="#u-upload" />
+                            </svg>
+                        </div>
+                        <div class="upload-area-title">Dosyayı sürükleyip bırakın</div>
+                        <div class="upload-area-hint">MP4 · MOV · AVI · MKV · WEBM</div>
+                        <button class="browse-btn" id="browseBtn" type="button">Dosya Seç</button>
+                        <input type="file" id="fileInput" multiple accept=".mp4,.mov,.avi,.mkv,.webm"
+                            style="display:none">
+                    </div>
+
+                    <div class="file-info" id="fileInfo">
+                        <div class="file-info-label">Seçilen Dosya</div>
+                        <div class="file-details" id="fileDetails"></div>
+                    </div>
+                </div>
+
+                <!-- ── FOLDER mode ── -->
+                <div class="mode-panel" id="panel-folder">
+                    <div class="upload-area" id="folderArea" role="button" tabindex="0">
+                        <div class="upload-area-icon">
+                            <svg width="16" height="16">
+                                <use href="#u-folder" />
+                            </svg>
+                        </div>
+                        <div class="upload-area-title">Klasörü sürükleyip bırakın</div>
+                        <div class="upload-area-hint">Klasördeki tüm video dosyaları kuyruğa eklenir</div>
+                        <button class="browse-btn" id="folderBrowseBtn" type="button">Klasör Seç</button>
+                        <input type="file" id="folderInput" webkitdirectory multiple accept=".mp4,.mov,.avi,.mkv,.webm"
+                            style="display:none">
+                    </div>
+                    <div id="folderSummary"
+                        style="font-size:12px;color:var(--text-muted);margin-top:-8px;margin-bottom:12px;min-height:18px">
+                    </div>
+                </div>
+
+                <!-- ── URL mode ── -->
+                <div class="mode-panel" id="panel-url">
+                    <div class="url-input-row">
+                        <input type="url" id="urlQueueInput" autocomplete="off" spellcheck="false"
+                            placeholder="https://drive.google.com/… veya doğrudan .mp4 URL">
+                        <button class="btn btn-secondary" type="button" onclick="addUrlToQueue()"
+                            style="white-space:nowrap;height:34px">
+                            <svg width="13" height="13">
+                                <use href="#u-plus" />
+                            </svg>
+                            Kuyruğa Ekle
+                        </button>
+                    </div>
+                    <div class="url-platform-hint" id="urlPlatformHint"></div>
+                </div>
+
+                <!-- ── Settings (always visible) ── -->
+                <div class="section-divider"></div>
+                <div class="section-label">İşleme Ayarları</div>
+
+                <div class="form-group" style="margin-bottom:16px">
+                    <label class="form-label" for="processingProfile">İşleme Modu</label>
+                    <select id="processingProfile" class="input-field" style="max-width:320px">
+                        <option value="crf_10">Native (CRF 10 - Orijinal Kalite)</option>
+                        <option value="crf_12">Ultra Kalite (CRF 12)</option>
+                        <option value="crf_14" selected>Dengeli (CRF 14 - E-Ticaret İdeal)</option>
+                        <option value="crf_16">Standart (CRF 16)</option>
+                        <option value="crf_18">Küçük Dosya (CRF 18)</option>
+                        <option value="web_opt">Sadece Web Optimize (Kalite/FPS Değişmez)</option>
+                    </select>
+                </div>
+
+                <div class="concurrent-row" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+                    <label class="form-label" for="concurrentInput">Eşzamanlı yükleme</label>
+                    <input type="number" id="concurrentInput" min="1" max="8" value="2" class="input-field"
+                        style="width:72px" title="Paralel yükleme sayısı (1-8)">
+                </div>
+
+                <div id="presetResolutionSection" class="preset-section" style="margin-bottom:16px">
+                    <div class="preset-buttons" role="radiogroup">
+                        <div class="preset-btn" data-preset="original" tabindex="0">
+                            <div class="preset-name">Orijinal</div>
+                            <div class="preset-desc">Ölçekleme yok</div>
+                        </div>
+                        <div class="preset-btn active" data-preset="720p" tabindex="0">
+                            <div class="preset-name">720p</div>
+                            <div class="preset-desc">Hızlı · Düşük boyut</div>
+                        </div>
+                        <div class="preset-btn" data-preset="1080p" tabindex="0">
+                            <div class="preset-name">1080p</div>
+                            <div class="preset-desc">Yüksek kalite · Orta boyut</div>
+                        </div>
+                        <div class="preset-btn" data-preset="2k" tabindex="0">
+                            <div class="preset-name">2K</div>
+                            <div class="preset-desc">1440p</div>
+                        </div>
+                        <div class="preset-btn" data-preset="4k" tabindex="0">
+                            <div class="preset-name">4K</div>
+                            <div class="preset-desc">2160p</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-grid">
+                    <div class="form-group span-2">
+                        <label class="form-label" for="videoName">Video Adı</label>
+                        <input type="text" id="videoName" class="input-field"
+                            placeholder="Boş bırakılırsa dosya adı kullanılır">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="folderId">Klasör <span
+                                style="font-weight:400;color:var(--text-subtle)">(opsiyonel)</span></label>
+                        <select id="folderId" class="input-field">
+                            <option value="">Klasör Seçin...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tags">Etiketler</label>
+                        <input type="text" id="tags" class="input-field" placeholder="ürün, tanıtım, eğitim">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="projectName">Proje</label>
+                        <input type="text" id="projectName" class="input-field" placeholder="2026 Kampanyası">
+                    </div>
+                    <div class="form-group span-2">
+                        <label class="form-label" for="notes">Not</label>
+                        <textarea id="notes" class="input-field" rows="2"
+                            placeholder="Video hakkında kısa not…"></textarea>
+                    </div>
+                </div>
+
+                <!-- ── Queue list ── -->
+                <div class="queue-section" id="queueSection">
+                    <div class="queue-header">
+                        <span class="queue-title">Kuyruk (<span id="queueCount">0</span>)</span>
+                        <span class="queue-summary-text" id="queueSummaryText"></span>
+                    </div>
+                    <div class="queue-list" id="uploadQueue"></div>
+                </div>
+
+                <!-- Single file progress (file mode only) -->
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-header">
+                        <span id="progressLabel">Yükleniyor…</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-metrics" id="progressMetrics"></div>
+                </div>
+
+                <!-- Actions -->
+                <div class="form-actions actions">
+                    <button class="btn btn-secondary" id="cancelBtn" type="button" onclick="resetAll()">İptal</button>
+                    <!-- Single file mode upload button -->
+                    <button class="btn btn-primary" id="uploadBtn" type="button" onclick="uploadSingle()" disabled
+                        style="display:none">
+                        <svg width="13" height="13">
+                            <use href="#u-upload" />
+                        </svg>
+                        Yükle
+                    </button>
+                    <!-- Queue mode start button -->
+                    <button class="btn btn-primary" id="startQueueBtn" type="button" onclick="startQueue()" disabled
+                        style="display:none">
+                        <svg width="13" height="13">
+                            <use href="#u-upload" />
+                        </svg>
+                        Tümünü Yükle
+                    </button>
+                </div>
+
+                <!-- Single file result -->
+                <div class="result-container" id="resultContainer">
+                    <div class="result-header">
+                        <div class="result-icon-wrap">
+                            <svg width="14" height="14">
+                                <use href="#u-check" />
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="result-title">Video başarıyla yüklendi</div>
+                            <div class="result-subtitle">İşleme sıraya alındı — durum aşağıda otomatik güncelleniyor
+                            </div>
+                        </div>
+                    </div>
+                    <div class="result-content" id="resultContent"></div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="video-upload.js"></script>
+</body>
+
+</html>
