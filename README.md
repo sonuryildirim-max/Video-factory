@@ -1,116 +1,81 @@
-# Version: v1.0.0 - The Factory Birth
+# Version: v1.0.0 — The Factory Birth
 
 ---
 
-## 🇬🇧 English Documentation
+## English (Global Operations)
 
-# Video-factory
-A standalone, high-performance video processing and management system built on Cloudflare Workers, R2 Storage, and D1 Database.
+# Video-factory: Enterprise Video Lifecycle Management
+A robust, distributed video processing ecosystem engineered for low-latency delivery and high-availability storage. Built on a serverless Cloudflare Workers backbone with R2 Object Storage and D1 Relational DB.
 
-### 🚀 Key Features
+### Technical Value Pillars
 
-*   **Standalone Notification System**: An integrated real-time toast notification mechanism for instant feedback on system operations and job statuses.
-*   **BKEventManager**: A sophisticated SPA event manager designed to prevent memory leaks by centralizing listener management and ensuring clean view transitions.
-*   **Modular Architecture**: Clean separation of concerns with dedicated modules for:
-    *   **Upload**: High-speed presigned R2 uploads.
-    *   **Import**: Server-side URL import logic.
-    *   **Metadata**: Intelligent video metadata extraction and indexing.
-*   **Nuke RAW Protocol**: A smart cleanup tool that optimizes storage costs by identifying and purging orphaned raw files and abandoned multipart uploads in R2.
+#### 1. Native Notification Engine
+A standalone, zero-dependency notification system providing asynchronous status feedback. Decoupled from core business logic to ensure consistent UX during high-load processing states.
 
-### 📊 System Visualization
+#### 2. BKEventManager (Memory-Safe SPA Handling)
+A proprietary event orchestration layer designed for Single Page Applications. Implements strict garbage collection patterns for event listeners, eliminating common memory leaks during client-side navigation.
 
-#### System Flow Diagram
+#### 3. Modular Service Architecture
+High-granularity routing and service separation:
+- **Video Ingestion**: Optimized multipart upload handlers for R2.
+- **Remote Acquisition**: Server-side URL import protocols with security sanitization.
+- **Resource Indexing**: Intelligent metadata extraction and relational mapping via D1.
+
+#### 4. Storage Optimization: Nuke Protocol
+A strategic R2 optimization toolset. Automatically mitigates object storage bloat by identifying orphaned raw assets and terminating abandoned multipart uploads beyond the 24-hour retention window.
+
+### System Architecture
+
+#### Processing Pipeline
 ```mermaid
-graph TD
-    A[Client / Dashboard] -->|Upload / URL Import| B(Cloudflare Worker API)
-    B -->|Store RAW| C[(R2 Raw Bucket)]
-    B -->|Create Job| D[(D1 Database)]
-    E[Hetzner / Python Agent] -->|Poll Job| D
-    E -->|Download RAW| C
-    E -->|FFmpeg Process| E
-    E -->|Upload MP4| F[(R2 Public Bucket)]
-    E -->|Complete Job| D
-    D -->|Notify| A
+graph LR
+    A[Core Dashboard] -->|API Gateway| B(Cloudflare Workers)
+    B -->|Blob Storage| C{R2 Raw Bucket}
+    B -->|State Management| D{D1 Database}
+    E[Compute Node / Agent] -->|Job Polling| D
+    E -->|Source Fetch| C
+    E -->|Transcoding| E
+    E -->|Egress| F{R2 Distribution}
+    E -->|Finalize| D
 ```
 
-#### Modular Structure
-```mermaid
-graph TD
-    subgraph "Source (src)"
-        R[Routes] --> VM[Video Modules]
-        VM --> VUP[Upload]
-        VM --> VIM[Import]
-        VM --> VMT[Metadata]
-        S[Services] --> JS[JobService]
-        S --> DS[DeletionService]
-        S --> US[UploadService]
-        RP[Repositories] --> D1[D1Repository]
-        RP --> JR[JobRepository]
-    end
-```
-
-### 🛠 Installation & Setup
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/your-repo/video-factory.git
-    ```
-2.  **Install dependencies**:
-    ```bash
-    npm install
-    ```
-3.  **Environment Variables**:
-    *   Copy `.env.example` to `.dev.vars` (for local development).
-    *   Set up Cloudflare D1 and R2 bindings in `wrangler.toml`.
-
-### 🛡 Security & Compliance
-*   **No Hardcoded Secrets**: Always use Cloudflare Secrets or encrypted variables.
-*   **Access Control**: Implements root and admin-level role segregation.
-*   **Data Integrity**: Foreign key constraints and transaction-safe operations in D1.
+#### Directory Overview
+- `src/routes`: API boundary and role-based access control.
+- `src/services`: Core logic (Transcription, Deletion, Lifecycle).
+- `src/repositories`: Data persistence and FTS5 search integration.
+- `public`: Enterprise-grade management dashboard.
 
 ---
 
-## 🇹🇷 Türkçe Dokümantasyon
+## Türkçe (Kurumsal Operasyonlar)
 
-# Video-factory
-Cloudflare Workers, R2 Storage ve D1 Database üzerine inşa edilmiş; bağımsız, yüksek performanslı bir video işleme ve yönetim sistemidir.
+# Video-factory: Kurumsal Video Yaşam Döngüsü Yönetimi
+Düşük gecikmeli teslimat ve yüksek erişilebilirlikli depolama için tasarlanmış, dağıtık bir video işleme ekosistemi. Cloudflare Workers mimarisi üzerine kurulu; R2 Nesne Depolama ve D1 İlişkisel Veritabanı ile güçlendirilmiştir.
 
-### 🚀 Öne Çıkan Özellikler
+### Mühendislik İlkeleri ve Kritik Çözümler
 
-*   **Standalone Bildirim Sistemi**: İşlem durumlarını ve sistem mesajlarını anlık olarak ileten, entegre toast bildirim mekanizması.
-*   **BKEventManager**: Sayfalar arası geçişte bellek sızıntılarını önleyen, merkezi dinleyici yönetimi sağlayan SPA olay yöneticisi.
-*   **Modüler Mimari**: Aşağıdaki servisler için parçalanmış ve optimize edilmiş yapı:
-    *   **Upload**: R2 presigned destekli hızlı yükleme.
-    *   **Import**: Sunucu tarafı URL import mantığı.
-    *   **Metadata**: Akıllı video meta verisi çıkarma ve indeksleme.
-*   **Nuke RAW Protokolü**: R2 depolama maliyetlerini optimize eden; yetim kalan raw dosyaları ve yarım kalmış multipart yüklemeleri tespit edip temizleyen akıllı araç.
+#### 1. Yerel Bildirim Motoru (Native Notification Engine)
+Asenkron durum geri bildirimi sağlayan, bağımsız ve düşük kaynak tüketen bildirim sistemi. İşlem yoğunluğundan bağımsız olarak kullanıcı deneyimini kesintisiz tutmak için ana iş mantığından izole edilmiştir.
 
-### 📊 Sistem Görselleştirmesi
+#### 2. BKEventManager (Bellek Yönetimli Olay Katmanı)
+Tek Sayfa Uygulamaları (SPA) için geliştirilmiş özel olay yönetim katmanı. Listener yönetimi için katı çöp toplama (garbage collection) standartları uygulayarak istemci tarafındaki bellek sızıntılarını tamamen ortadan kaldırır.
 
-#### Sistem Akış Şeması
-(Yukarıdaki İngilizce bölümdeki Mermaid diyagramı ile aynı akışı takip eder: Yükleme -> İşleme -> Depolama.)
+#### 3. Modüler Servis Mimarisi
+Parçalanmış ve yüksek ölçeklenebilir yapı:
+- **Veri Girişi (Ingestion)**: R2 için optimize edilmiş çok parçalı yükleme (multipart upload) yöneticileri.
+- **Uzak Kaynak Alımı**: Güvenlik filtrelerinden geçirilmiş sunucu tarafı URL aktarım protokolleri.
+- **İndeksleme**: D1 üzerinden yürütülen akıllı meta veri çıkarma ve ilişkisel haritalama.
 
-#### Modüler Dosya Yapısı Şeması
-*   `src/routes`: API uç noktaları ve modüler yönlendirme.
-*   `src/services`: İş mantığı (Job, Deletion, Upload servisleri).
-*   `src/repositories`: Veritabanı erişim katmanı (D1, Job, User repoları).
-*   `public`: Modern SPA dashboard ve görsel arayüz.
+#### 4. Depolama Verimliliği: Nuke Protokolü
+R2 maliyetlerini optimize eden akıllı temizlik aracı. Yetim kalan ham dosyaları ve 24 saati aşan sahipsiz yükleme işlemlerini otomatik olarak tespit ederek depolama maliyetlerini düşürür.
 
-### 🛠 Kurulum ve Yapılandırma
+### Sistem Görselleştirmesi
 
-1.  **Projeyi Klonlayın**:
-    ```bash
-    git clone https://github.com/your-repo/video-factory.git
-    ```
-2.  **Bağımlılıkları Yükleyin**:
-    ```bash
-    npm install
-    ```
-3.  **Çevresel Değişkenler**:
-    *   `.env.example` dosyasını `.dev.vars` olarak kopyalayın.
-    *   `wrangler.toml` içerisinden D1 ve R2 binding'lerini yapılandırın.
+#### Operasyonel İş Akışı
+(Yukarıdaki Mermaid diyagramında belirtildiği gibi: Dashboard -> Worker -> R2/D1 -> Agent -> Dağıtım.)
 
-### 🛡 Güvenlik Korumaları
-*   **Gizlilik**: Gerçek şifreleri veya hassas ID'leri asla kod içerisine yazmayın.
-*   **Erişim**: Root ve Admin rollerine dayalı yetkilendirme sistemi.
-*   **Temizlik**: `.gitignore` dosyasının doğru yapılandırıldığından emin olun ve hassas dosyaları commit etmeyin.
+#### Proje Yapılandırması
+- `src/routes`: API sınırları ve yetkilendirme katmanı.
+- `src/services`: Temel iş mantığı (Job, Deletion, Lifecycle).
+- `src/repositories`: Veri kalıcılığı ve FTS5 hızlı arama desteği.
+- `public`: Kurumsal yönetim paneli ve SPA arayüzü.
