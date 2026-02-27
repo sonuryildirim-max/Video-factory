@@ -3,8 +3,9 @@
  * Edge-first video processing (Workers, D1, R2, Hetzner agent)
  */
 
-import { routeRequest } from './routes/index.js';
+import { routeRequest, getStatsFromD1, formatStatsMessage } from './routes/index.js';
 import { VideoService } from './services/VideoService.js';
+import { sendTelegram } from './utils/telegram.js';
 import { checkSignalLost, sendSignalLostAlert } from './monitoring.js';
 import { cleanupOrphanedUploads } from './services/R2MultipartCleanup.js';
 import { SECURITY_HEADERS } from './config/constants.js';
@@ -65,10 +66,14 @@ export default {
             const reqId = request.headers.get('X-Request-ID') || crypto.randomUUID();
             headers.set('X-Request-ID', reqId);
 
-            return new Response(response.body, {
+            // Cloudflare Workers require a body with known length (no raw stream without Content-Length).
+            // Always buffer so we never pass an unbounded or chunked stream to new Response().
+            const body = await response.arrayBuffer();
+            headers.set('Content-Length', String(body.byteLength));
+            return new Response(body, {
                 status: response.status,
                 statusText: response.statusText,
-                headers: headers
+                headers
             });
 
         } catch (error) {
@@ -94,6 +99,20 @@ export default {
                     }
                 }
 
+                // Zombie Sweeper: 1h+ processing → PENDING (return to queue), then Telegram if any
+                const svc = new VideoService(env);
+                if (env.DB) {
+                    try {
+                        const sweepResult = await svc.unstickOrphanedJobs(60);
+                        if (sweepResult.unstuck_count > 0) {
+                            logger.info('Cron: Zombie Sweeper returned jobs to queue', { count: sweepResult.unstuck_count });
+                            await sendTelegram(env, `${sweepResult.unstuck_count} adet asılı kalmış iş kuyruğa iade edildi.`);
+                        }
+                    } catch (e) {
+                        logger.error('Cron: Zombie Sweeper failed', { error: e?.message ?? String(e) });
+                    }
+                }
+
                 // V17: Mark zombie jobs (45 min processing timeout)
                 if (env.DB) {
                     const ZOMBIE_TIMEOUT_MIN = 45;
@@ -116,10 +135,23 @@ export default {
                     logger.info('Cron cleanupOrphanedUploads', multipartResult);
                 }
 
-                const svc = new VideoService(env);
                 const days = 3;
                 const result = await svc.cleanupOldVideos(days);
                 logger.info('Cron cleanupOldVideos', { days, cleaned_count: result.cleaned_count });
+
+                // End-of-day report (23:59 UTC cron)
+                const now = new Date();
+                if (now.getUTCHours() === 23 && now.getUTCMinutes() >= 59) {
+                    try {
+                        logger.info('Cron: Firing end-of-day Telegram report.');
+                        const stats = await getStatsFromD1(env);
+                        const formattedStats = formatStatsMessage(stats, true);
+                        const reportMessage = '📊 GÜN SONU RAPORU\n\n' + formattedStats;
+                        await sendTelegram(env, reportMessage);
+                    } catch (e) {
+                        logger.error('End-of-day Telegram report failed', { error: e?.message ?? String(e) });
+                    }
+                }
             } catch (e) {
                 logger.error('Cron scheduled failed', { error: e?.message ?? String(e) });
             }

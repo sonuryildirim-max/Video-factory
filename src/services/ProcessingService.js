@@ -159,4 +159,26 @@ export class ProcessingService {
         logger.info('Unstuck jobs', { count: jobIds.length, minutes, job_ids: jobIds });
         return { unstuck_count: jobIds.length, job_ids: jobIds };
     }
+
+    /**
+     * Release jobs stuck in processing for this worker (agent startup cleanup).
+     * Only jobs assigned to the given worker_id and older than minutes are reset to PENDING.
+     */
+    async releaseStaleJobsForWorker(workerId, minutes = 45) {
+        if (!workerId || workerId === 'unknown') return { released_count: 0 };
+        const rows = await this.env.DB.prepare(`
+            SELECT id FROM conversion_jobs
+            WHERE worker_id = ? AND status IN (${PROCESSING_STATUSES.map(s => `'${s}'`).join(',')})
+              AND started_at < datetime('now', '-' || ? || ' minutes')
+        `).bind(workerId, minutes).all();
+        const jobIds = (rows?.results ?? []).map(r => r.id);
+        if (jobIds.length === 0) return { released_count: 0 };
+        const placeholders = jobIds.map(() => '?').join(',');
+        await this.env.DB.prepare(`
+            UPDATE conversion_jobs SET status = ?, worker_id = NULL, started_at = NULL, error_message = NULL
+            WHERE id IN (${placeholders})
+        `).bind(JOB_STATUS.PENDING, ...jobIds).run();
+        logger.info('Release stale jobs for worker (startup)', { workerId, count: jobIds.length, minutes, job_ids: jobIds });
+        return { released_count: jobIds.length };
+    }
 }

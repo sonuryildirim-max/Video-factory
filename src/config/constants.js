@@ -12,7 +12,7 @@ export const TRACKING_PARAMS = [
     "__hstc", "__hsfp", "__hssc", "email"
 ];
 
-// media-src: CDN and R2 for Görüntüle modal (public URL only; avoids MEDIA_ELEMENT_ERROR)
+// PLAY_01/CSP: media-src — R2 CDN (cdn.bilgekarga.tr) video oynatma için güvenli; MEDIA_ELEMENT_ERROR önlemi
 export const SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net; media-src 'self' blob: data: https://cdn.bilgekarga.tr https://*.r2.cloudflarestorage.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",

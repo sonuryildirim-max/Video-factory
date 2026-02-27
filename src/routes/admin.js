@@ -5,6 +5,10 @@
 import { requireRoot } from '../middleware/auth.js';
 import { handleError } from '../utils/errors.js';
 import { SECURITY_HEADERS } from '../config/constants.js';
+import { cleanupOrphanedUploads } from '../services/R2MultipartCleanup.js';
+import { SecurityLogRepository } from '../repositories/SecurityLogRepository.js';
+import { logger } from '../utils/logger.js';
+import { writeSystemLog } from '../utils/systemLog.js';
 
 /**
  * Handle admin routes
@@ -34,7 +38,7 @@ export async function handleAdminRoutes(request, env, ctx) {
 
         // POST /api/admin/cleanup-r2
         if (request.method === 'POST' && url.pathname === '/api/admin/cleanup-r2') {
-            await requireRoot(request, env);
+            const auth = await requireRoot(request, env);
 
             if (!env.DB) return Response.json({ error: 'DB not configured' }, { status: 500 });
             const rawBucket = env.R2_RAW_UPLOADS_BUCKET;
@@ -93,33 +97,105 @@ export async function handleAdminRoutes(request, env, ctx) {
                 } while (delCursor);
             }
 
+            if (env.DB) {
+                try {
+                    const secLog = new SecurityLogRepository(env.DB);
+                    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+                    await secLog.insert({
+                        ip,
+                        action: 'ADMIN_CLEANUP_R2',
+                        status: 'success',
+                        userAgent: request.headers.get('User-Agent') || null,
+                        country: request.cf?.country || 'XX',
+                        city: request.cf?.city || 'Unknown',
+                        details: { deleted_raw_count, deleted_trash_count },
+                        createdBy: auth?.user || null,
+                    });
+                } catch (e) { logger.warn('ADMIN_CLEANUP_R2 log failed', { message: e?.message }); }
+            }
+            const ipCleanup = request.headers.get('CF-Connecting-IP') || 'unknown';
+            writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'R2 cleanup (orphans)', details: { ip: ipCleanup, method: request.method, deleted_raw_count, deleted_trash_count } }).catch(() => {});
             return Response.json({ deleted_raw_count, deleted_trash_count });
         }
 
-        // POST /api/admin/purge-raw (NUCLEAR BUTTON)
+        // POST /api/admin/purge-raw (NUKE) — R2_RAW_BUCKET içindeki TÜM nesneleri fiziksel sil; D1'de ilgili kayıtları "Storage Cleaned" işaretle. PUBLIC kovanına dokunma.
         if (request.method === 'POST' && url.pathname === '/api/admin/purge-raw') {
-            await requireRoot(request, env);
+            const auth = await requireRoot(request, env);
             const rawBucket = env.R2_RAW_UPLOADS_BUCKET;
             if (!rawBucket) return Response.json({ error: "RAW_BUCKET bulunamadı!" }, { status: 500 });
+            if (!env.DB) return Response.json({ error: "DB yapılandırılmadı!" }, { status: 500 });
 
-            let deletedCount = 0;
-            let listed;
+            const multipartResult = await cleanupOrphanedUploads(env);
+            const aborted = multipartResult?.aborted ?? 0;
+
+            // 1) D1: COMPLETED + completed_at < 1 saat, geçerli r2_raw_key, henüz temizlenmemiş — işaretlenecek id'ler
+            const rows = await env.DB.prepare(`
+                SELECT id, r2_raw_key FROM conversion_jobs
+                WHERE status = 'COMPLETED'
+                  AND completed_at < datetime('now', '-1 hour')
+                  AND r2_raw_key IS NOT NULL AND r2_raw_key != '' AND r2_raw_key != 'url-import-pending'
+                  AND (storage_cleaned_at IS NULL)
+                  AND (deleted_at IS NULL)
+            `).all();
+            const jobs = rows?.results ?? rows ?? [];
+            const markedIds = [];
+
+            // 2) R2_RAW_BUCKET içindeki TÜM nesneleri fiziksel olarak sil (D1'den bağımsız; yetim/orphan dahil)
+            let deletedR2 = 0;
+            let rawCursor;
             do {
-                listed = await rawBucket.list({ limit: 500 });
-                if (listed.objects) {
-                    for (const obj of listed.objects) {
+                const opts = { limit: 1000 };
+                if (rawCursor) opts.cursor = rawCursor;
+                const listed = await rawBucket.list(opts);
+                for (const obj of (listed.objects || [])) {
+                    try {
                         await rawBucket.delete(obj.key);
-                        deletedCount++;
+                        deletedR2++;
+                    } catch (_) {
+                        // Tekil silme hataları yutulur, döngü devam eder
                     }
                 }
-            } while (listed.truncated);
+                rawCursor = listed.truncated ? listed.cursor : undefined;
+            } while (rawCursor);
 
-            return Response.json({ success: true, message: `Nükleer Temizlik Başarılı! Silinen RAW çöpü: ${deletedCount}` });
+            // 3) D1: Silinen/artık R2'de olmayan tüm ilgili kayıtları "Storage Cleaned" işaretle
+            for (const job of jobs) {
+                markedIds.push(job.id);
+            }
+            if (markedIds.length > 0) {
+                const placeholders = markedIds.map(() => '?').join(',');
+                await env.DB.prepare(
+                    `UPDATE conversion_jobs SET storage_cleaned_at = datetime('now') WHERE id IN (${placeholders})`
+                ).bind(...markedIds).run();
+            }
+
+            const msg = aborted > 0
+                ? `Nuke: R2 RAW bucket tamamen boşaltıldı (${deletedR2} dosya silindi). ${markedIds.length} kayıt "Storage Cleaned", ${aborted} multipart iptal.`
+                : `Nuke: R2 RAW bucket tamamen boşaltıldı (${deletedR2} dosya silindi). ${markedIds.length} kayıt "Storage Cleaned".`;
+            if (env.DB) {
+                try {
+                    const secLog = new SecurityLogRepository(env.DB);
+                    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+                    await secLog.insert({
+                        ip,
+                        action: 'ADMIN_NUKE',
+                        status: 'success',
+                        userAgent: request.headers.get('User-Agent') || null,
+                        country: request.cf?.country || 'XX',
+                        city: request.cf?.city || 'Unknown',
+                        details: { deleted_count: deletedR2, marked_count: markedIds.length, aborted_multipart: aborted },
+                        createdBy: auth?.user || null,
+                    });
+                } catch (e) { logger.warn('ADMIN_NUKE log failed', { message: e?.message }); }
+            }
+            const ipNuke = request.headers.get('CF-Connecting-IP') || 'unknown';
+            writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'R2 purge-raw (nuke)', details: { ip: ipNuke, method: request.method, deleted_count: deletedR2, marked_count: markedIds.length } }).catch(() => {});
+            return Response.json({ success: true, message: msg, deleted_count: deletedR2, marked_count: markedIds.length });
         }
 
         // POST /api/admin/cleanup
         if (request.method === 'POST' && url.pathname.includes('/admin/cleanup')) {
-            await requireRoot(request, env);
+            const auth = await requireRoot(request, env);
 
             const days = parseInt(url.searchParams.get('days')) || 180;
             if (days < 1 || days > 3650) {
@@ -129,6 +205,22 @@ export async function handleAdminRoutes(request, env, ctx) {
             await env.DB.prepare("DELETE FROM logs WHERE timestamp < datetime('now', '-' || ? || ' days')")
                 .bind(days).run();
 
+            if (env.DB) {
+                try {
+                    const secLog = new SecurityLogRepository(env.DB);
+                    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+                    await secLog.insert({
+                        ip,
+                        action: 'ADMIN_CLEANUP_LOGS',
+                        status: 'success',
+                        userAgent: request.headers.get('User-Agent') || null,
+                        country: request.cf?.country || 'XX',
+                        city: request.cf?.city || 'Unknown',
+                        details: { days },
+                        createdBy: auth?.user || null,
+                    });
+                } catch (e) { logger.warn('ADMIN_CLEANUP_LOGS log failed', { message: e?.message }); }
+            }
             return Response.json({ success: true, message: `${days} günden eski veriler temizlendi` });
         }
 

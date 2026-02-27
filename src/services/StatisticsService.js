@@ -8,8 +8,22 @@ import { JOB_STATUS, PROCESSING_STATUSES, QUEUED_STATUSES } from '../config/BK_C
 import { StatisticsDTO } from '../utils/dto.js';
 import { ValidationError, NotFoundError, AuthError, BK_ERROR_CODES } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
+import { getR2RealUsage } from './R2RealStatsService.js';
+import { StorageLifecycleLogRepository } from '../repositories/StorageLifecycleLogRepository.js';
 
 const RAW_BUCKET = 'R2_RAW_UPLOADS_BUCKET';
+
+/** Derive R2 public bucket key from public_url (same logic as DeletionService). */
+function publicKeyFromUrl(publicUrl, cdnBase) {
+    if (!publicUrl || !cdnBase) return '';
+    const base = cdnBase.replace(/\/$/, '');
+    if (publicUrl.startsWith(base)) return publicUrl.slice(base.length).replace(/^\//, '');
+    try {
+        return new URL(publicUrl).pathname.replace(/^\/public\/?/, '').replace(/^\//, '');
+    } catch {
+        return '';
+    }
+}
 
 export class StatisticsService {
     constructor(env, jobRepo) {
@@ -107,14 +121,40 @@ export class StatisticsService {
     }
 
     async getStatistics(days = 30) {
-        const [summary, activityResult, uploadersResult] = await Promise.all([
+        const [summary, activityResult, uploadersResult, storageKeys] = await Promise.all([
             this.jobRepo.getStatistics(),
             this.jobRepo.getRecentActivity(days),
             this.jobRepo.getTopUploaders(10),
+            this.jobRepo.getStorageKeysForStats(),
         ]);
         const activity = activityResult?.results || activityResult || [];
         const uploaders = uploadersResult?.results || uploadersResult || [];
-        return StatisticsDTO.build(summary, activity, uploaders);
+        const cdnBase = this.env.R2_PUBLIC_URL || (this.env.CDN_BASE_URL ? String(this.env.CDN_BASE_URL).replace(/\/$/, '') : '') || 'https://cdn.bilgekarga.tr';
+        const rawKeysSet = new Set(storageKeys?.rawKeys || []);
+        const publicKeysSet = new Set(
+            (storageKeys?.publicUrls || []).map(url => publicKeyFromUrl(url, cdnBase)).filter(Boolean)
+        );
+        const d1Keys = { rawKeys: rawKeysSet, publicKeys: publicKeysSet };
+        const r2Real = await getR2RealUsage(this.env, d1Keys);
+        const rawMb = Math.round((r2Real.rawTotalBytes / (1024 * 1024)) * 100) / 100;
+        const pubMb = Math.round((r2Real.publicTotalBytes / (1024 * 1024)) * 100) / 100;
+        const r2Payload = {
+            raw_usage_mb:    rawMb,
+            public_usage_mb: pubMb,
+            total_real_r2:   Math.round((rawMb + pubMb) * 100) / 100,
+            sync_error:      r2Real.sync_error,
+        };
+        if (r2Real.sync_error && this.env.DB) {
+            try {
+                const storageLog = new StorageLifecycleLogRepository(this.env.DB);
+                await storageLog.insert({
+                    eventType: 'size_mismatch',
+                    reason: 'D1 vs R2 key/size sync error',
+                    details: { rawTotalBytes: r2Real.rawTotalBytes, publicTotalBytes: r2Real.publicTotalBytes },
+                });
+            } catch (e) { logger.warn('StorageLifecycleLog insert (size_mismatch)', { message: e?.message }); }
+        }
+        return StatisticsDTO.build(summary, activity, uploaders, r2Payload);
     }
 
     async cleanupOldVideos(days = 3) {
@@ -144,6 +184,15 @@ export class StatisticsService {
         if (rows.length > 0) {
             const placeholders = rows.map(() => '?').join(',');
             await this.env.DB.prepare(`DELETE FROM conversion_jobs WHERE id IN (${placeholders})`).bind(...rows.map(r => r.id)).run();
+            try {
+                const storageLog = new StorageLifecycleLogRepository(this.env.DB);
+                await storageLog.insert({
+                    eventType: 'purge',
+                    bucket: 'raw',
+                    reason: `Eski RAW silindi, ${rows.length} kayıt`,
+                    details: { job_ids: rows.map(r => r.id), keys_deleted: r2Keys.length },
+                });
+            } catch (e) { logger.warn('StorageLifecycleLog insert (purge)', { message: e?.message }); }
         }
         return { cleaned_count: rows.length, job_ids: rows.map(r => r.id) };
     }

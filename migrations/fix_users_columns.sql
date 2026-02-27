@@ -1,6 +1,5 @@
--- Add last_login and last_activity to users table if migrations 013/014 not yet applied
--- Run manually: wrangler d1 execute bk-video-db --remote --command "ALTER TABLE users ADD COLUMN last_login TEXT;"
--- Then: wrangler d1 execute bk-video-db --remote --command "ALTER TABLE users ADD COLUMN last_activity TEXT;"
--- Note: If columns already exist, you will get "duplicate column name" error — that is OK.
-ALTER TABLE users ADD COLUMN last_login TEXT;
-ALTER TABLE users ADD COLUMN last_activity TEXT;
+-- Add last_login and last_activity to users table if migrations 013/014 not yet applied.
+-- If 013/014 already ran, columns exist and ALTER would fail with "duplicate column name".
+-- This migration is idempotent: no-op so it can be marked applied when columns already exist.
+-- (SQLite has no ADD COLUMN IF NOT EXISTS; manual fix: run the ALTERs once by hand if needed.)
+SELECT 1;

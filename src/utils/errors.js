@@ -11,6 +11,7 @@
  */
 
 import { logger } from './logger.js';
+import { writeSystemLog } from './systemLog.js';
 
 // ─── Error code catalogue (BK-namespaced, ≥ 2200) ────────────────────────────
 export const BK_ERROR_CODES = {
@@ -52,6 +53,30 @@ export const BK_ERROR_CODES = {
 };
 
 const API_DOCS_BASE = 'https://bilgekarga.com/api/docs';
+
+/** Max lengths for error sink (errors table) */
+const ERROR_MSG_MAX = 1000;
+const ERROR_STACK_MAX = 2000;
+
+/**
+ * Insert error into errors table (error sink) for /status "KRITIK" list.
+ * Call inside ctx.waitUntil; does not throw.
+ * @param {object} env - Worker env (must have DB)
+ * @param {Error} error
+ * @param {number} statusCode
+ */
+export async function insertErrorSink(env, error, statusCode) {
+    if (!env?.DB) return;
+    try {
+        const msg = (error?.message || String(error)).slice(0, ERROR_MSG_MAX);
+        const stack = (error?.stack && String(error.stack).slice(0, ERROR_STACK_MAX)) || null;
+        await env.DB.prepare(
+            'INSERT INTO errors (created_at, message, status_code, stack) VALUES (datetime(\'now\'), ?, ?, ?)'
+        ).bind(msg, statusCode, stack).run();
+    } catch (e) {
+        logger.error('Error sink insert failed', { message: e?.message });
+    }
+}
 
 // ─── Error Classes ────────────────────────────────────────────────────────────
 
@@ -274,9 +299,28 @@ export function handleError(error, _request, env, ctx) {
         ctx.waitUntil(sendSamaritanEdgeAlert(env, error));
     }
 
-    // 401/403 on critical paths → Samaritan Security Alert (fire-and-forget)
-    if ((statusCode === 401 || statusCode === 403) && ctx?.waitUntil && env && _request) {
-        ctx.waitUntil(sendSamaritanSecurityAlert(env, _request, error));
+    // 401/403 → system_logs (AUTH) + Samaritan Security Alert (fire-and-forget)
+    if ((statusCode === 401 || statusCode === 403) && env && _request) {
+        const ip = _request?.headers?.get?.('CF-Connecting-IP') || 'unknown';
+        let path = '';
+        try { path = new URL(_request?.url || '').pathname; } catch (_) {}
+        const writeLog = writeSystemLog(env, {
+            level: 'ERROR',
+            category: 'AUTH',
+            message: error?.message || 'Unauthorized',
+            details: { ip, method: _request?.method || 'unknown', path },
+        });
+        if (ctx?.waitUntil) {
+            ctx.waitUntil(writeLog);
+            ctx.waitUntil(sendSamaritanSecurityAlert(env, _request, error));
+        } else {
+            writeLog.catch(() => {});
+        }
+    }
+
+    // Error sink: log to errors table for /status "KRITIK" (fire-and-forget)
+    if (env?.DB && (statusCode >= 400) && ctx?.waitUntil) {
+        ctx.waitUntil(insertErrorSink(env, error, statusCode));
     }
 
     const body = {

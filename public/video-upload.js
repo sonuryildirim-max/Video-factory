@@ -159,10 +159,10 @@ async function loadFolders() {
     } catch (_) { }
 }
 
-const VALID_PROCESSING_PROFILES = ['crf_10', 'crf_12', 'crf_14', 'crf_16', 'crf_18', 'web_opt'];
+const VALID_PROCESSING_PROFILES = ['6', '8', '10', '12', '14', 'web_opt'];
 function restoreUploadPreferences() {
     const raw = localStorage.getItem('bk_upload_processing_profile') || 'crf_14';
-    const profile = VALID_PROCESSING_PROFILES.includes(raw) ? raw : 'crf_14';
+    const profile = VALID_PROCESSING_PROFILES.includes(raw) ? raw : '12';
     const quality = localStorage.getItem('bk_upload_quality') || '720p';
     if (els.processingProfile) els.processingProfile.value = profile;
     UploadState.selectedPreset = quality;
@@ -181,7 +181,7 @@ if (typeof window !== 'undefined') window.toggleTheme = toggleTheme;
 // ─── PROCESSING MODE / PRESET LOGIC SHIELD ─────────────────────────────────────
 /** Web Optimize: resolution preset hidden; quality sent as original (no scale). Native: preset visible. */
 function isResolutionLocked() {
-    const profile = els.processingProfile?.value || 'crf_14';
+    const profile = els.processingProfile?.value || '12';
     return profile === 'web_opt' || profile === 'web_optimize';
 }
 
@@ -278,7 +278,7 @@ function setupListeners() {
     });
 
     els.processingProfile?.addEventListener('change', () => {
-        const profile = els.processingProfile?.value || 'crf_14';
+        const profile = els.processingProfile?.value || '12';
         localStorage.setItem('bk_upload_processing_profile', profile);
         updatePresetVisibility();
     });
@@ -355,7 +355,7 @@ function handleFileSelection(files) {
             .on('item-updated', () => renderQueue())
             .on('queue-done', () => onQueueDone());
     }
-    const processingProfile = els.processingProfile?.value || 'crf_14';
+    const processingProfile = els.processingProfile?.value || '12';
     const folderId = els.folderSelect?.value || null;
     videoFiles.forEach(f => {
         const v = validateFile(f);
@@ -439,7 +439,7 @@ async function uploadSingle() {
                 fileName: UploadState.selectedFile.name,
                 fileSize: UploadState.selectedFile.size,
                 quality: getEffectiveQuality(),
-                processingProfile: els.processingProfile?.value || 'crf_14',
+                processingProfile: els.processingProfile?.value || '12',
                 displayName: els.videoName?.value.trim() || null,
                 tags: els.tags?.value.trim() || '',
                 projectName: els.projectName?.value.trim() || '',
@@ -643,7 +643,7 @@ function handleFolderSelect(files) {
     }
 
     const preset = getEffectiveQuality();
-    const processingProfile = els.processingProfile?.value || 'crf_14';
+    const processingProfile = els.processingProfile?.value || '12';
     const tags = els.tags?.value.trim() || '';
     const project = els.projectName?.value.trim() || '';
     const notes = els.notes?.value.trim() || '';
@@ -665,7 +665,7 @@ function addUrlToQueue() {
     if (!resolved) { showToast('Geçerli bir URL girin (https://…)', 'error'); return; }
 
     const preset = getEffectiveQuality();
-    const processingProfile = els.processingProfile?.value || 'crf_14';
+    const processingProfile = els.processingProfile?.value || '12';
     const tags = els.tags?.value.trim() || '';
     const project = els.projectName?.value.trim() || '';
     const notes = els.notes?.value.trim() || '';
@@ -810,7 +810,7 @@ class UploadQueue {
                 fileName: file.name,
                 fileSize: file.size,
                 quality: isResolutionLocked() ? '1080p' : (item.preset || '720p'),
-                processingProfile: item.processingProfile || els.processingProfile?.value || 'crf_14',
+                processingProfile: item.processingProfile || els.processingProfile?.value || '12',
                 displayName: els.videoName?.value.trim() || null,
                 tags: item.tags || '',
                 projectName: item.project || '',
@@ -865,7 +865,7 @@ class UploadQueue {
             body: JSON.stringify({
                 url: item.url,
                 quality: isResolutionLocked() ? '1080p' : (item.preset || '720p'),
-                processingProfile: item.processingProfile || els.processingProfile?.value || 'crf_14',
+                processingProfile: item.processingProfile || els.processingProfile?.value || '12',
                 displayName: els.videoName?.value.trim() || null,
                 projectName: item.project || '',
                 tags: item.tags || '',

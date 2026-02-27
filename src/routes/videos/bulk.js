@@ -6,11 +6,13 @@ import { requireAuth, requireRoot } from '../../middleware/auth.js';
 import { jsonResponse, ValidationError } from '../../utils/errors.js';
 import { SecurityLogRepository } from '../../repositories/SecurityLogRepository.js';
 import { logger } from '../../utils/logger.js';
+import { writeSystemLog } from '../../utils/systemLog.js';
 
 export async function handleBulkRoutes(request, svc, path, method, env) {
     if (path === '/api/videos/bulk-delete' && method === 'POST') return await routeBulkDelete(request, svc, env);
     if (path === '/api/videos/bulk-restore' && method === 'POST') return await routeBulkRestore(request, svc, env);
     if (path === '/api/videos/bulk-purge' && method === 'POST') return await routeBulkPurge(request, svc, env);
+    if (path === '/api/videos/bulk-move' && method === 'POST') return await routeBulkMove(request, svc, env);
     return null;
 }
 
@@ -36,6 +38,8 @@ async function routeBulkDelete(request, svc, env) {
     }
     try {
         const result = await svc.deleteJobs(ids, auth.user, env, auth.isRoot);
+        const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || 'unknown';
+        writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'Bulk delete', details: { ip, method: request.method, deleted_count: result?.deleted ?? 0, job_ids: ids } }).catch(() => {});
         return jsonResponse(result);
     } catch (e) {
         const stack = e?.stack || '';
@@ -75,5 +79,16 @@ async function routeBulkPurge(request, svc, env) {
     const ids = Array.isArray(body.ids) ? body.ids : (body.id != null ? [body.id] : []);
     if (ids.length === 0) throw new ValidationError('ids array required');
     const result = await svc.purgeJobs(ids, env, true);
+    return jsonResponse(result);
+}
+
+async function routeBulkMove(request, svc, env) {
+    const auth = await requireAuth(request, env);
+    const body = await request.json().catch(() => null);
+    if (!body) throw new ValidationError('Request body must be JSON');
+    const ids = Array.isArray(body.ids) ? body.ids : (body.id != null ? [body.id] : []);
+    if (ids.length === 0) throw new ValidationError('ids array required');
+    const folderId = body.folder_id != null ? body.folder_id : null;
+    const result = await svc.bulkMoveJobs(ids, folderId, auth.user);
     return jsonResponse(result);
 }

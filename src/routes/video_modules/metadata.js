@@ -7,6 +7,7 @@ import { ValidationError, NotFoundError } from '../../utils/errors.js';
 import { SecurityLogRepository } from '../../repositories/SecurityLogRepository.js';
 import { VideoDTO, VideoListDTO } from '../../utils/dto.js';
 import { logger } from '../../utils/logger.js';
+import { writeSystemLog } from '../../utils/systemLog.js';
 import { jsonResponse, normalizeQuality, notifyAgentWakeup } from '../videos.js';
 
 export async function routeListVideos(request, svc, url, env) {
@@ -22,8 +23,10 @@ export async function routeListVideos(request, svc, url, env) {
     else if (bucket === 'raw') status = '';
     else if (bucket === 'deleted') status = JOB_STATUS.DELETED;
 
+    // Query param: folder veya folder_id (binding ile SQL injection safe)
     const folderParam = sp.get('folder_id') || sp.get('folder');
     const folderId = folderParam ? parseInt(folderParam, 10) : null;
+    logger.debug('SQL Param (folder_id)', { folderId, folder_param: folderParam ?? '(yok)' });
     const filters = {
         search: sp.get('search') || '',
         status,
@@ -38,7 +41,16 @@ export async function routeListVideos(request, svc, url, env) {
         page: Math.max(1, parseInt(sp.get('page') || '1')),
         limit: Math.min(100, Math.max(1, parseInt(sp.get('per_page') || sp.get('limit') || '25'))),
         sort_by: sp.get('sort_by') || 'created_at',
-        sort_order: sp.get('sort_order') || 'DESC',
+        sort_order: (() => {
+            const raw = sp.get('sort_order') || sp.get('order') || 'DESC';
+            return String(raw).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+        })(),
+        offset: (() => {
+            const raw = sp.get('offset');
+            if (raw === null || raw === '') return undefined;
+            const n = parseInt(raw, 10);
+            return Number.isNaN(n) ? undefined : Math.max(0, n);
+        })(),
         include_deleted: bucket === 'deleted' || sp.get('include_deleted') === '1',
         cursor: sp.get('cursor') || undefined,
     };
@@ -89,6 +101,8 @@ export async function routeUpdateVideo(id, request, svc, env) {
 export async function routeDeleteVideo(id, request, svc, env) {
     const auth = await requireAuth(request, env);
     await svc.deleteJob(id, auth.user, env, auth.isRoot);
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'Job deleted (soft/hard)', details: { ip, method: request.method, job_id: id } }).catch(() => {});
     return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*' } });
 }
 

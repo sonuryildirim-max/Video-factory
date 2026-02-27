@@ -75,12 +75,24 @@ export class VideoService {
         return this.uploadService.handleDirectUpload(request, token);
     }
 
+    async handleMultipartUpload(request, userId) {
+        return this.uploadService.handleMultipartUpload(request, userId);
+    }
+
     async importFromUrl(params, userId) {
         return this.uploadService.importFromUrl(params, userId);
     }
 
     async importFromUrlSync(params, userId, env) {
         return this.uploadService.importFromUrlSync(params, userId, env);
+    }
+
+    isDriveFolderUrl(url) {
+        return this.uploadService.isDriveFolderUrl(url);
+    }
+
+    async importFromDriveFolder(params, userId) {
+        return this.uploadService.importFromDriveFolder(params, userId);
     }
 
     async getJobs(filters = {}) {
@@ -127,6 +139,11 @@ export class VideoService {
         return this.deletionService.purgeJobs(ids, env, isRoot);
     }
 
+    async bulkMoveJobs(ids, folderId, userId) {
+        const result = await this.jobRepo.updateFolderForJobs(ids, folderId == null || folderId === '' ? null : parseInt(folderId, 10));
+        return result;
+    }
+
     async retryJob(id, userId, env, isRoot = false) {
         return this.processingService.retryJob(id, userId, env, isRoot);
     }
@@ -145,5 +162,9 @@ export class VideoService {
 
     async unstickOrphanedJobs(minutes = 30) {
         return this.processingService.unstickOrphanedJobs(minutes);
+    }
+
+    async releaseStaleJobsForWorker(workerId, minutes = 45) {
+        return this.processingService.releaseStaleJobsForWorker(workerId, minutes);
     }
 }

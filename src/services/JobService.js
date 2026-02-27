@@ -10,6 +10,7 @@ import { LogService } from './LogService.js';
 import { CONFIG } from '../config/config.js';
 import { JOB_STATUS } from '../config/BK_CONSTANTS.js';
 import { ValidationError, NotFoundError, BK_ERROR_CODES } from '../utils/errors.js';
+import { normalizePublicUrl } from '../utils/urls.js';
 import { logger } from '../utils/logger.js';
 
 const RAW_BUCKET_BINDING = 'R2_RAW_UPLOADS_BUCKET';
@@ -139,7 +140,7 @@ export class JobService {
 
             // Raw deletion succeeded — now safe to mark COMPLETED in D1
             const job = await this.jobRepo.completeJob(jobId, workerId, {
-                public_url: result.public_url,
+                public_url: publicUrl,
                 file_size_output: result.file_size_output || 0,
                 duration: result.duration || 0,
                 processing_time_seconds: result.processing_time_seconds || 0,
@@ -155,7 +156,7 @@ export class JobService {
 
             // Log job completion
             await this.logService.createJobLog(jobId, 'INFO', 'Job completed successfully', 'COMPLETE', {
-                public_url: result.public_url,
+                public_url: publicUrl,
                 file_size_output: result.file_size_output,
                 processing_time_seconds: result.processing_time_seconds,
                 compression_percentage: job.file_size_input > 0 

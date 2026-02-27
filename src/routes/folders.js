@@ -8,6 +8,8 @@ import { requireAuth } from '../middleware/auth.js';
 import { jsonResponse } from '../utils/errors.js';
 import { ValidationError } from '../utils/errors.js';
 import { FolderService } from '../services/FolderService.js';
+import { writeSystemLog } from '../utils/systemLog.js';
+import { sendTelegram } from '../utils/telegram.js';
 
 export async function handleFolderRoutes(request, env) {
     const url = new URL(request.url);
@@ -58,6 +60,17 @@ async function routeCreateFolder(request, env, folderService) {
     if (name.length > 128) throw new ValidationError('Folder name too long');
 
     const folder = await folderService.createFolder(name);
+
+    Promise.all([
+        writeSystemLog(env, {
+            level: 'INFO',
+            category: 'FOLDER',
+            message: 'Folder created',
+            details: { folder_id: folder.id, name: folder.name }
+        }).catch(() => {}),
+        sendTelegram(env, `📁 Yeni klasör: ${folder.name}${folder.id != null ? ` (id: ${folder.id})` : ''}`).catch(() => {})
+    ]).catch(() => {});
+
     return jsonResponse(folder, 201);
 }
 

@@ -7,6 +7,13 @@ const CONFIG = {
     USE_MOCK: false,
 };
 
+// #region agent log
+function _dbg(payload) {
+    var p = { location: payload.location || 'video-dashboard.js', message: payload.message, data: payload.data || {}, timestamp: Date.now(), runId: payload.runId, hypothesisId: payload.hypothesisId };
+    fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }).catch(function () {});
+}
+// #endregion
+
 // ─── INLINE SVG ICONS (Lucide-style, used in JS-generated HTML) ───────────────
 const IC = {
     eye: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`,
@@ -176,10 +183,11 @@ const IC = {
     document.head.appendChild(style);
 })();
 
-// ─── EVENT MANAGER (SPA Listener Management) ─────────────────────────────────
+// ─── EVENT MANAGER (SPA Listener Management + App-Level Events) ──────────────
 class BKEventManager {
     constructor() {
         this.listeners = [];
+        this._appSubs = {}; // { 'FOLDER_CHANGE': [fn, ...] }
     }
     add(el, type, fn, opt) {
         if (!el) return;
@@ -190,8 +198,31 @@ class BKEventManager {
         this.listeners.forEach(l => l.el.removeEventListener(l.type, l.fn, l.opt));
         this.listeners = [];
     }
+    on(eventName, fn) {
+        if (!this._appSubs[eventName]) this._appSubs[eventName] = [];
+        this._appSubs[eventName].push(fn);
+    }
+    emit(eventName, data) {
+        if (eventName === 'FOLDER_CHANGE') {
+            console.log('F-DEBUG: FOLDER_CHANGE emitted, folderId:', data);
+        }
+        const fns = this._appSubs[eventName];
+        if (fns) fns.forEach(fn => { try { fn(data); } catch (e) { console.error('BKEventManager.emit', eventName, e); } });
+    }
 }
 const EventManager = new BKEventManager();
+
+/** URL'den folder id döner (folder_id veya folder); yoksa '' */
+function getFolderFromUrl() {
+    const search = new URLSearchParams(window.location.search);
+    const out = search.get('folder_id') || search.get('folder') || '';
+    if (out === '' || out == null) {
+        console.log('F-DEBUG: getFolderFromUrl() returned:', out, '— (boş/null → tüm videolar listelenir)');
+    } else {
+        console.log('F-DEBUG: getFolderFromUrl() returned:', out);
+    }
+    return out;
+}
 
 // ─── APP STATE (single source of truth) ──────────────────────────────────────
 const AppState = {
@@ -263,6 +294,7 @@ function initDomRefs() {
     Els.storageTrend = document.getElementById('storageTrend');
     Els.searchInput = document.getElementById('searchInput');
     Els.searchInputTopBar = document.getElementById('searchInputTopBar');
+    Els.searchInputSidebar = document.getElementById('searchInputSidebar');
     Els.libraryVideoCountBadge = document.getElementById('libraryVideoCountBadge');
     Els.statusFilter = document.getElementById('statusFilter');
     Els.presetFilter = document.getElementById('presetFilter');
@@ -275,6 +307,8 @@ function initDomRefs() {
     Els.infiniteScrollSentinel = document.getElementById('infiniteScrollSentinel');
     Els.bulkRetryBtn = document.getElementById('bulkRetryBtn');
     Els.headerCheckbox = document.getElementById('headerCheckbox');
+    Els.pageSize = document.getElementById('pageSize');
+    Els.loadMoreVideosBtn = document.getElementById('loadMoreVideosBtn');
 }
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
@@ -314,6 +348,7 @@ function applyRootUI() {
         const r2Section = document.getElementById('r2BucketExplorerSection');
         if (r2Section) r2Section.style.display = 'block';
     }
+    updateNukeButtonVisibility();
 }
 
 async function loadAppUser() {
@@ -400,15 +435,29 @@ async function applyPathView() {
         loadAgentStatus();
         populateDashboardStats();
     } else if (path === '/library') {
-        // Library — URL'deki bucket/status/folder parametrelerini oku
-        const search = new URLSearchParams(window.location.search);
-        const bucket = search.get('bucket') || '';
-        const status = search.get('status') || '';
-        const folderId = search.get('folder_id') || search.get('folder') || '';
+        // Library — URL as source of truth; URL'de yoksa mevcut state (örn. Klasörler'de yazılan arama) korunur
+        const urlSearch = new URLSearchParams(window.location.search);
+        const bucket = urlSearch.get('bucket') || '';
+        const status = urlSearch.get('status') || '';
+        const folderId = getFolderFromUrl();
+        const searchFromUrl = urlSearch.get('search');
+        const searchVal = (searchFromUrl !== null && searchFromUrl !== '') ? searchFromUrl : (AppState.filters && AppState.filters.search) || '';
+        // #region agent log
+        _dbg({ location: 'video-dashboard.js:applyPathView', message: 'library path: search from URL vs state', data: { searchFromUrl: searchFromUrl, searchInState: AppState.filters && AppState.filters.search, fullUrl: window.location.href }, hypothesisId: 'D' });
+        // #endregion
         AppState.filters = AppState.filters || {};
         if (bucket) AppState.filters.bucket = bucket; else delete AppState.filters.bucket;
-        if (status) AppState.filters.status = status;
+        if (status) AppState.filters.status = status; else delete AppState.filters.status;
         if (folderId) AppState.filters.folder_id = folderId; else delete AppState.filters.folder_id;
+        AppState.filters.search = searchVal;
+        if (Els.searchInput) Els.searchInput.value = searchVal;
+        if (Els.searchInputTopBar) Els.searchInputTopBar.value = searchVal;
+        if (Els.searchInputSidebar) Els.searchInputSidebar.value = searchVal;
+        if (searchVal && (searchFromUrl === null || searchFromUrl === '')) {
+            const params = new URLSearchParams(window.location.search);
+            params.set('search', searchVal);
+            history.replaceState({}, '', '/library?' + params.toString());
+        }
         if (panelVideos) panelVideos.removeAttribute('hidden');
         const lib = document.getElementById('bkSidebarLibrary');
         if (lib) lib.classList.add('active');
@@ -417,10 +466,10 @@ async function applyPathView() {
             const folder = (AppState.folders || []).find(f => f.id == folderId);
             const folderLabel = folder ? 'Klasör: ' + folder.name : 'Library';
             if (topbarTitle) topbarTitle.textContent = folderLabel;
-            document.title = folderLabel + ' — BK Video Factory';
+            document.title = folderLabel + ' — Bilge Karga Video';
         } else {
             if (topbarTitle) topbarTitle.textContent = bucket === 'deleted' ? 'Silinenler' : bucket === 'raw' ? 'Ham Videolar' : bucket === 'public' ? 'Yayında' : 'Library';
-            document.title = 'BK Video Factory';
+            document.title = 'Bilge Karga Video';
         }
         if (topbarSearch) topbarSearch.style.display = '';
         if (topbarBadge) topbarBadge.style.display = '';
@@ -430,6 +479,7 @@ async function applyPathView() {
         loadTopViewed();
         loadAgentStatus();
         renderSidebarFolders();
+        EventManager.emit('FOLDER_CHANGE', folderId);
     } else if (path === '/folders') {
         // Folders
         if (panelFolders) panelFolders.removeAttribute('hidden');
@@ -440,7 +490,12 @@ async function applyPathView() {
         if (topbarBadge) topbarBadge.style.display = 'none';
         loadFolders();
     } else {
-        // Fallback: show Library
+        // Fallback: show Library; URL'den folder senkronu (popstate ile uyumlu)
+        const folderIdFallback = getFolderFromUrl();
+        if (folderIdFallback) {
+            AppState.filters = AppState.filters || {};
+            AppState.filters.folder_id = folderIdFallback;
+        }
         if (panelVideos) panelVideos.removeAttribute('hidden');
         const lib = document.getElementById('bkSidebarLibrary');
         if (lib) lib.classList.add('active');
@@ -453,6 +508,7 @@ async function applyPathView() {
         loadTopViewed();
         loadAgentStatus();
         renderSidebarFolders();
+        EventManager.emit('FOLDER_CHANGE', folderIdFallback);
     }
 }
 
@@ -503,9 +559,10 @@ async function loadFolders() {
             : '<p class="folders-empty">Henüz klasör yok. Yeni Klasör butonuyla oluşturun.</p>';
     }
     renderSidebarFolders();
+    populateMultiUploadFolderSelect();
 }
 
-/** Dynamic sidebar folder list */
+/** Dynamic sidebar folder list — DOM: data-folder-id on outermost layer; click on full row (no dead zone) */
 function renderSidebarFolders() {
     const container = document.getElementById('sidebarFoldersContainer');
     if (!container) return;
@@ -516,17 +573,26 @@ function renderSidebarFolders() {
     container.innerHTML = folders.map(f => {
         if (f.is_system) return '';
         const active = selectedFolderId == f.id ? ' active' : '';
-        return `<a href="/library?folder=${f.id}" class="sidebar-sub-item${active}" data-folder-id="${f.id}">
+        const fid = String(f.id ?? '');
+        return `<div class="sidebar-sub-item${active}" data-folder-id="${escapeHtml(fid)}" role="button" tabindex="0">
             <span class="bk-sidebar-label">${escapeHtml(f.name)}</span>
-        </a>`;
+        </div>`;
     }).join('');
 
+    // Tıklama en dış katmanda (div) — ölü nokta kalmaz; BKEventManager ile
     container.querySelectorAll('.sidebar-sub-item').forEach(el => {
-        el.addEventListener('click', (e) => {
+        EventManager.add(el, 'click', (e) => {
             e.preventDefault();
-            const id = el.dataset.folderId;
-            const name = el.innerText.trim();
-            filterByFolder(id, name);
+            const id = el.getAttribute('data-folder-id');
+            const name = (el.querySelector('.bk-sidebar-label') || el).innerText.trim();
+            console.log('F-DEBUG: Clicked Folder ID:', id, 'name:', name);
+            if (id) filterByFolder(id, name);
+        });
+        EventManager.add(el, 'keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                el.click();
+            }
         });
     });
 }
@@ -538,7 +604,8 @@ function renderFolderCard(f) {
         : `filterByFolder(${f.id}, '${String(f.name).replace(/'/g, "\\'")}')`;
     const deleteBtnHtml = f.is_system ? '' :
         `<button class="folder-delete-btn" onclick="event.stopPropagation();deleteFolder(${f.id})" title="Klasörü sil">✕</button>`;
-    return `<div class="folder-card${sys}" onclick="${onclick}" style="cursor:pointer" role="button" tabindex="0">
+    const dataAttr = f.is_system ? '' : ` data-folder-id="${escapeHtml(String(f.id ?? ''))}"`;
+    return `<div class="folder-card${sys}"${dataAttr} onclick="${onclick}" style="cursor:pointer" role="button" tabindex="0">
         ${FOLDER_ICON}
         <span class="folder-name">${escapeHtml(f.name)}</span>
         <span class="folder-count">${f.count} video</span>
@@ -548,8 +615,78 @@ function renderFolderCard(f) {
 
 function filterByFolder(folderId, folderName) {
     AppState.filters = { ...AppState.filters, folder_id: folderId };
-    history.pushState({}, '', '/library?folder=' + folderId);
-    applyPathView();
+    let url = '/library?folder=' + folderId;
+    if (AppState.filters.search) url += '&search=' + encodeURIComponent(AppState.filters.search);
+    history.pushState({}, '', url);
+    applyPathView(); // URL + state + loadVideos; FOLDER_CHANGE applyPathView içinde emit edilir
+}
+
+/** Çoklu yükleme: klasör select'ini doldurur (loadFolders sonrası). */
+function populateMultiUploadFolderSelect() {
+    const sel = document.getElementById('multiUploadFolderId');
+    if (!sel) return;
+    const folders = AppState.folders || [];
+    const userFolders = folders.filter(f => !f.is_system);
+    const urlFolder = getFolderFromUrl();
+    sel.innerHTML = '<option value="">Klasör seçin (opsiyonel)</option>' +
+        userFolders.map(f => `<option value="${escapeHtml(String(f.id))}">${escapeHtml(f.name || '')}</option>`).join('');
+    if (urlFolder) sel.value = urlFolder;
+}
+
+/**
+ * Çoklu video yükle: her dosya için FormData'ya folder_id append edip POST /api/upload.
+ * İşlem bitince tabloyu API'den yeniler (loadVideos).
+ */
+async function submitMultiUpload() {
+    const input = document.getElementById('multiUploadFileInput');
+    const btn = document.getElementById('multiUploadBtn');
+    const statusEl = document.getElementById('multiUploadStatus');
+    if (!input || !input.files || input.files.length === 0) {
+        showNotification('Lütfen en az bir dosya seçin.', 'warning');
+        return;
+    }
+    const folderId = (document.getElementById('multiUploadFolderId') && document.getElementById('multiUploadFolderId').value) || '';
+    const files = Array.from(input.files);
+    if (btn) { btn.disabled = true; }
+    if (statusEl) statusEl.textContent = `${files.length} dosya yükleniyor…`;
+
+    let ok = 0;
+    let err = 0;
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('folder_id', folderId);
+
+        try {
+            const res = await fetch(`${CONFIG.API_BASE || ''}/api/upload`, {
+                method: 'POST',
+                credentials: 'include',
+                body: formData
+            });
+            if (res.status === 401) {
+                location.href = '/login';
+                return;
+            }
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || body.message || `HTTP ${res.status}`);
+            }
+            ok++;
+        } catch (e) {
+            err++;
+            showNotification(`${file.name}: ${e.message}`, 'error');
+        }
+        if (statusEl) statusEl.textContent = `${i + 1}/${files.length} yüklendi…`;
+    }
+
+    if (statusEl) statusEl.textContent = err === 0 ? `${ok} dosya yüklendi.` : `${ok} başarılı, ${err} hata.`;
+    if (btn) btn.disabled = false;
+    input.value = '';
+    if (ok > 0) {
+        showNotification(`${ok} video yüklendi. Tablo yenileniyor.`, 'success');
+        loadVideos();
+    }
 }
 
 function filterByFolderBucket(bucket) {
@@ -599,6 +736,36 @@ async function showNewFolderModal() {
         });
         showNotification('Klasör oluşturuldu: ' + (res?.name || name), 'success');
         loadFolders();
+    } catch (e) {
+        showNotification(e?.message || 'Klasör oluşturulamadı', 'error');
+    }
+}
+
+/** URL modal: create folder via API, add to select and select it (real folder, no ghost). */
+async function createFolderFromUrlModal() {
+    const name = window.prompt('Yeni klasör adı:');
+    if (!name || !name.trim()) return;
+    const folderSelect = document.getElementById('urlFolder');
+    if (!folderSelect) return;
+    try {
+        const res = await apiFetch('/api/folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() })
+        });
+        if (!res || !res.id) {
+            showNotification('Klasör oluşturuldu ama yanıt geçersiz.', 'error');
+            return;
+        }
+        const opt = document.createElement('option');
+        opt.value = res.id;
+        opt.textContent = res.name || name.trim();
+        folderSelect.appendChild(opt);
+        folderSelect.value = res.id;
+        if (Array.isArray(AppState.folders)) {
+            AppState.folders.push({ id: res.id, name: res.name || name.trim(), is_system: false });
+        }
+        showNotification('Klasör oluşturuldu ve seçildi: ' + (res.name || name.trim()), 'success');
     } catch (e) {
         showNotification(e?.message || 'Klasör oluşturulamadı', 'error');
     }
@@ -663,6 +830,18 @@ function setupGlobalListeners() {
             startSystemAlertsPoll();
         }
     });
+
+    // Çoklu yükle: dosya seçilince Yükle butonunu aktif et
+    const multiInput = document.getElementById('multiUploadFileInput');
+    const multiBtn = document.getElementById('multiUploadBtn');
+    const multiStatus = document.getElementById('multiUploadStatus');
+    if (multiInput && multiBtn) {
+        multiInput.addEventListener('change', function () {
+            const n = (this.files && this.files.length) || 0;
+            multiBtn.disabled = n === 0;
+            if (multiStatus) multiStatus.textContent = n > 0 ? n + ' dosya seçildi' : '';
+        });
+    }
 }
 
 const AGENT_POLL_INTERVAL_MS = 30000;
@@ -762,12 +941,12 @@ async function loadSystemAlerts() {
             apiSlot.textContent = message || '';
             if (status === 'warning') {
                 banner.classList.add('warning-mode');
-                mainTitle.textContent = 'SİSTEM UYARISI';
+                mainTitle.textContent = 'Sistem uyarısı';
                 alertWarning.style.display = 'block';
                 alertCritical.style.display = 'none';
             } else {
                 banner.classList.remove('warning-mode');
-                mainTitle.textContent = 'KRİTİK SİSTEM UYARISI';
+                mainTitle.textContent = 'Önemli uyarı';
                 alertCritical.style.display = 'block';
                 alertWarning.style.display = 'none';
             }
@@ -806,13 +985,27 @@ function destroyActivePlayer() {
 // ─── EVENT LISTENERS (attached once) ─────────────────────────────────────────
 // ─── VIEW LISTENERS (attached via EventManager for SPA cleanup) ─────────────
 function setupViewListeners() {
+    // #region agent log
+    _dbg({ location: 'video-dashboard.js:setupViewListeners', message: 'setupViewListeners called', data: { hasStatusFilter: !!Els.statusFilter, hasPresetFilter: !!Els.presetFilter, hasSearchInputSidebar: !!Els.searchInputSidebar }, hypothesisId: 'A' });
+    // #endregion
     if (!Els.statusFilter || !Els.presetFilter) return;
+    // #region agent log
+    _dbg({ location: 'video-dashboard.js:setupViewListeners', message: 'attaching search listeners', data: { sidebar: !!Els.searchInputSidebar }, hypothesisId: 'A' });
+    // #endregion
     function applySearch(val) {
         AppState.filters.search = val;
         AppState.currentPage = 1;
         loadVideos();
         if (Els.searchInput && Els.searchInput !== Els.searchInputTopBar) Els.searchInput.value = val;
         if (Els.searchInputTopBar) Els.searchInputTopBar.value = val;
+        if (Els.searchInputSidebar) Els.searchInputSidebar.value = val;
+        if (window.location.pathname === '/library') {
+            const params = new URLSearchParams(window.location.search);
+            if (val) params.set('search', val);
+            else params.delete('search');
+            const qs = params.toString();
+            history.replaceState({}, '', qs ? '/library?' + qs : '/library');
+        }
     }
     if (Els.searchInput) {
         EventManager.add(Els.searchInput, 'input', debounce(() => applySearch(Els.searchInput.value.trim()), 450));
@@ -820,6 +1013,26 @@ function setupViewListeners() {
     if (Els.searchInputTopBar) {
         EventManager.add(Els.searchInputTopBar, 'input', debounce(() => applySearch(Els.searchInputTopBar.value.trim()), 450));
     }
+    if (Els.searchInputSidebar) {
+        EventManager.add(Els.searchInputSidebar, 'input', debounce(() => applySearch(Els.searchInputSidebar.value.trim()), 450));
+        EventManager.add(Els.searchInputSidebar, 'keydown', (e) => {
+            if (e.key === 'Escape') {
+                Els.searchInputSidebar.value = '';
+                applySearch('');
+            }
+        });
+    }
+    function clearSearchOnEscape(el, applyFn) {
+        if (!el) return;
+        EventManager.add(el, 'keydown', (e) => {
+            if (e.key === 'Escape') {
+                el.value = '';
+                applyFn('');
+            }
+        });
+    }
+    clearSearchOnEscape(Els.searchInput, applySearch);
+    clearSearchOnEscape(Els.searchInputTopBar, applySearch);
 
     EventManager.add(Els.statusFilter, 'change', () => {
         AppState.filters.status = Els.statusFilter.value;
@@ -893,6 +1106,13 @@ function setupViewListeners() {
             if (hint) hint.textContent = platform ? `Tespit edildi: ${platform}` : '';
         });
     }
+    const urlNewFolderLink = document.getElementById('urlNewFolderLink');
+    if (urlNewFolderLink) {
+        EventManager.add(urlNewFolderLink, 'click', (e) => {
+            e.preventDefault();
+            createFolderFromUrlModal();
+        });
+    }
 
     // Sunucuyu uyandır
     const wakeServerBtn = document.getElementById('wakeServerBtn');
@@ -943,6 +1163,22 @@ function setupViewListeners() {
         EventManager.add(Els.bulkRetryBtn, 'click', () => bulkRetrySelected());
     }
 
+    // Sayfa başı (pageSize) değişince ilk sayfaya dön ve yeniden yükle
+    if (Els.pageSize) {
+        EventManager.add(Els.pageSize, 'change', () => {
+            AppState.currentPage = 1;
+            loadVideos(false);
+        });
+    }
+
+    // Daha Fazla Yükle: sonraki sayfayı ekle
+    if (Els.loadMoreVideosBtn) {
+        EventManager.add(Els.loadMoreVideosBtn, 'click', () => {
+            if (AppState.isLoadingVideos) return;
+            loadVideos(true);
+        });
+    }
+
     // Sort headers (videos table thead)
     document.querySelectorAll('#panelVideos .sort-header').forEach(el => {
         EventManager.add(el, 'click', () => {
@@ -957,7 +1193,7 @@ function setupViewListeners() {
         });
     });
 
-    // Header checkbox: select/deselect all deletable videos
+    // Header checkbox: select/deselect only visible (current page) deletable rows; IDs stay in selectedVideoIds (getSelectedIds() for API)
     if (Els.headerCheckbox) {
         EventManager.add(Els.headerCheckbox, 'change', (e) => {
             const checked = e.target.checked;
@@ -1038,7 +1274,8 @@ async function loadStatistics() {
         AppState.statistics = statsData;
         AppState.statsError = null;
         renderStatisticsUI();
-        if (AppState.appUser?.isRoot) loadR2Stats();
+        updateNukeButtonVisibility();
+        if (AppState.appUser?.isRoot) renderR2StorageWidget();
     } catch (error) {
         AppState.statsError = error.message;
         showNotification('İstatistikler yüklenemedi: ' + error.message, 'error');
@@ -1105,6 +1342,47 @@ function renderStatisticsUI() {
     renderDailyChart();
     renderRawStorageChart();
     renderPublicStorageChart();
+    updateNukeButtonVisibility();
+    renderR2StorageWidget();
+}
+
+function formatMbAsStorage(mb) {
+    if (mb == null || mb === 0) return '0 MB';
+    if (mb >= 1024) return (mb / 1024).toFixed(2) + ' GB';
+    return (Math.round(mb * 100) / 100) + ' MB';
+}
+
+function renderR2StorageWidget() {
+    const widget = document.getElementById('r2Widget');
+    const rawEl = document.getElementById('r2RawUsageMb');
+    const pubEl = document.getElementById('r2PublicUsageMb');
+    if (!widget) return;
+    const rawMb = AppState.statistics?.raw_usage_mb ?? 0;
+    const pubMb = AppState.statistics?.public_usage_mb ?? 0;
+    if (rawEl) rawEl.textContent = formatMbAsStorage(rawMb);
+    if (pubEl) pubEl.textContent = formatMbAsStorage(pubMb);
+    const isRoot = !!AppState.appUser?.isRoot;
+    widget.style.display = isRoot ? 'block' : 'none';
+    const nukeWidgetBtn = document.getElementById('btnNukeRawWidget');
+    if (nukeWidgetBtn) nukeWidgetBtn.style.display = isRoot && rawMb > 0 ? '' : 'none';
+}
+
+// UPLOAD_01: R2'de raw varsa Nuke butonu görünür, yoksa gizli; sadece root kullanıcı görür
+function updateNukeButtonVisibility() {
+    const btn = document.getElementById('btnNukeRaw');
+    if (!btn) return;
+    const isRoot = !!AppState.appUser?.isRoot;
+    if (!isRoot) {
+        btn.style.display = 'none';
+        return;
+    }
+    const s = AppState.statistics?.summary ?? {};
+    const rawBytes = s.raw_storage_bytes ?? s.total_input_size ?? 0;
+    const rawMb = AppState.statistics?.raw_usage_mb ?? 0;
+    const hasRawFiles = rawBytes > 0 || rawMb > 0;
+    btn.style.display = hasRawFiles ? '' : 'none';
+    const nukeWidgetBtn = document.getElementById('btnNukeRawWidget');
+    if (nukeWidgetBtn) nukeWidgetBtn.style.display = hasRawFiles ? '' : 'none';
 }
 
 function renderStatusChart() {
@@ -1140,19 +1418,23 @@ function renderStatusChart() {
 function renderRawStorageChart() {
     const el = document.getElementById('rawStorageChart');
     if (!el) return;
+    const rawMb = AppState.statistics?.raw_usage_mb ?? 0;
     const s = AppState.statistics?.summary ?? {};
     const rawBytes = s.raw_storage_bytes ?? s.total_input_size ?? 0;
-    const gb = rawBytes > 0 ? (rawBytes / 1_073_741_824).toFixed(2) : '0.00';
-    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:8px"><span style="font-size:28px;font-weight:600;color:var(--neon-cyan,#00ffff)">${escapeHtml(gb)} GB</span><span style="font-size:12px;color:var(--text-muted)">Raw (ham) depo</span></div>`;
+    const displayMb = rawMb > 0 ? rawMb : rawBytes / (1024 * 1024);
+    const label = displayMb >= 1024 ? (displayMb / 1024).toFixed(2) + ' GB' : (Math.round(displayMb * 100) / 100) + ' MB';
+    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:8px"><span style="font-size:28px;font-weight:600;color:var(--neon-cyan,#00ffff)">${escapeHtml(label)}</span><span style="font-size:12px;color:var(--text-muted)">Raw (ham) depo</span></div>`;
 }
 
 function renderPublicStorageChart() {
     const el = document.getElementById('publicStorageChart');
     if (!el) return;
+    const pubMb = AppState.statistics?.public_usage_mb ?? 0;
     const s = AppState.statistics?.summary ?? {};
     const pubBytes = s.public_storage_bytes ?? s.total_output_size ?? s.total_storage_bytes ?? 0;
-    const gb = pubBytes > 0 ? (pubBytes / 1_073_741_824).toFixed(2) : '0.00';
-    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:8px"><span style="font-size:28px;font-weight:600;color:var(--neon-emerald,#10b981)">${escapeHtml(gb)} GB</span><span style="font-size:12px;color:var(--text-muted)">Public (işlenmiş) depo</span></div>`;
+    const displayMb = pubMb > 0 ? pubMb : pubBytes / (1024 * 1024);
+    const label = displayMb >= 1024 ? (displayMb / 1024).toFixed(2) + ' GB' : (Math.round(displayMb * 100) / 100) + ' MB';
+    el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:8px"><span style="font-size:28px;font-weight:600;color:var(--neon-emerald,#10b981)">${escapeHtml(label)}</span><span style="font-size:12px;color:var(--text-muted)">Public (işlenmiş) depo</span></div>`;
 }
 
 function renderDailyChart() {
@@ -1183,16 +1465,18 @@ function setTrendEl(el, numericValue, label) {
 }
 
 // ─── VIDEOS ───────────────────────────────────────────────────────────────────
-/** @param {boolean} [append=false] - If true, fetch next page and append to list; otherwise replace. */
+/** @param {boolean} [append=false] - If true, fetch next page and append; otherwise replace. Parametre almıyorsa bile URL'deki ?folder=id kullanılır. */
 async function loadVideos(append = false) {
     if (AppState.isLoadingVideos) return;
+    if (!append) {
+        AppState.videos = [];
+        AppState.currentPage = 1;
+    }
     const pageToFetch = append ? AppState.currentPage + 1 : (AppState.currentPage || 1);
     if (append && pageToFetch > AppState.totalPages) return;
     AppState.isLoadingVideos = true;
-
-    if (!append) {
-        renderTableSkeleton();
-    }
+    renderLoadMoreButton();
+    if (!append) renderTableSkeleton();
 
     try {
         let data;
@@ -1201,16 +1485,24 @@ async function loadVideos(append = false) {
             AppState.currentPage = pageToFetch;
             data = generateMockVideos();
         } else {
+            const currentLimit = Els.pageSize ? Math.min(100, Math.max(1, parseInt(Els.pageSize.value, 10) || CONFIG.PAGE_SIZE)) : CONFIG.PAGE_SIZE;
             const params = new URLSearchParams({
                 page: pageToFetch,
-                limit: AppState.isMainView ? 5 : CONFIG.PAGE_SIZE,
+                limit: AppState.isMainView ? 5 : currentLimit,
                 sort_by: AppState.filters.sort_by || 'created_at',
                 sort_order: AppState.filters.sort_order || 'DESC',
                 ...Object.fromEntries(Object.entries(AppState.filters || {}).filter(([k, v]) => k !== 'sort_by' && k !== 'sort_order' && v !== '' && v != null)),
             });
-            // Klasör sayfasından gelen bucket: public | raw | deleted
-            const bucket = new URLSearchParams(window.location.search).get('bucket');
+            // #region agent log
+            _dbg({ location: 'video-dashboard.js:loadVideos', message: 'params before folder/bucket', data: { searchInParams: params.get('search'), searchInState: AppState.filters && AppState.filters.search }, hypothesisId: 'C' });
+            // #endregion
+            const folderFromUrl = getFolderFromUrl();
+            if (folderFromUrl) params.set('folder_id', folderFromUrl);
+            const search = new URLSearchParams(window.location.search);
+            const bucket = search.get('bucket');
             if (bucket) params.set('bucket', bucket);
+            const finalUrl = `${CONFIG.API_BASE || ''}/api/videos?${params}`;
+            console.log('F-DEBUG: Fetching URL:', finalUrl);
             data = await apiFetch(`/api/videos?${params}`);
         }
 
@@ -1236,13 +1528,26 @@ async function loadVideos(append = false) {
         renderPagination();
         renderMainViewToggle();
         renderInfiniteScrollEndMessage();
+        renderLoadMoreButton();
     } catch (error) {
         AppState.videosError = error.message;
         if (!append) renderTableError(error.message);
         else showNotification('Sonraki sayfa yüklenemedi: ' + error.message, 'error');
     } finally {
         AppState.isLoadingVideos = false;
+        renderLoadMoreButton();
     }
+}
+
+/** Show/hide and enable/disable "Daha Fazla Yükle" based on currentPage, totalPages, isMainView, isLoadingVideos. */
+function renderLoadMoreButton() {
+    const btn = Els.loadMoreVideosBtn;
+    if (!btn) return;
+    const hasMore = (AppState.currentPage || 1) < (AppState.totalPages || 1);
+    const show = hasMore && !AppState.isMainView;
+    btn.style.display = show ? '' : 'none';
+    btn.disabled = !!AppState.isLoadingVideos;
+    btn.textContent = AppState.isLoadingVideos ? 'Yükleniyor...' : 'Daha Fazla Yükle';
 }
 
 /** Append rows for additional videos to the table body. */
@@ -1266,7 +1571,9 @@ function renderTableSkeleton() {
     } else {
         const body = getTableBody();
         if (!body) return;
-        body.innerHTML = Array.from({ length: 5 }, () => '<tr class="bk-skeleton-row" aria-hidden="true"><td colspan="11"><div class="bk-skeleton" style="height:24px;border-radius:4px"></div></td></tr>').join('');
+        const loadingRow = '<tr><td colspan="11" class="bk-loading-row" style="padding:16px;text-align:center;color:var(--text-muted);font-size:13px;">Yükleniyor...</td></tr>';
+        const skeletonRows = Array.from({ length: 4 }, () => '<tr class="bk-skeleton-row" aria-hidden="true"><td colspan="11"><div class="bk-skeleton" style="height:24px;border-radius:4px"></div></td></tr>').join('');
+        body.innerHTML = loadingRow + skeletonRows;
     }
 }
 
@@ -1351,21 +1658,19 @@ function getNormalizedNameWithResolution(video) {
     return base + ' (' + res + ')';
 }
 
-/** Preset label: İşleme modu + CRF (crf_10..crf_18, web_opt; legacy native/ultra/dengeli vb.). */
+/** Preset label: İşleme modu + CRF. Prefer numeric crf (6,8,10,12,14); fallback to processing_profile string (legacy). */
 function getPresetLabel(video) {
+    const crfNum = video.bk?.crf ?? video.crf;
+    if (crfNum != null && [6, 8, 10, 12, 14].includes(Number(crfNum))) {
+        const labels = { 6: 'Native (6)', 8: 'Ultra Kalite (8)', 10: 'Dengeli (10)', 12: 'Standart (12)', 14: 'Küçük (14)' };
+        return labels[Number(crfNum)] || '—';
+    }
     const p = (video.bk && video.bk.processing_profile) || video.processing_profile || '';
+    if (p === 'web_opt' || p === 'web_optimize') return 'Sadece Web Optimize (Kalite/FPS Değişmez)';
     const map = {
-        crf_10: 'Native (CRF 10 - Orijinal Kalite)',
-        crf_12: 'Ultra Kalite (CRF 12)',
-        crf_14: 'Dengeli (CRF 14 - E-Ticaret İdeal)',
-        crf_16: 'Standart (CRF 16)',
-        crf_18: 'Küçük Dosya (CRF 18)',
-        web_opt: 'Sadece Web Optimize (Kalite/FPS Değişmez)',
-        native: 'Native (CRF 14)',
-        ultra: 'Ultra (CRF 16)',
-        dengeli: 'Dengeli (CRF 18)',
-        kucuk_dosya: 'Küçük Dosya (CRF 24)',
-        web_optimize: 'Web Optimize',
+        crf_10: 'Native (6)', crf_12: 'Ultra Kalite (8)', crf_14: 'Dengeli (10)', crf_16: 'Standart (12)', crf_18: 'Küçük (14)',
+        '6': 'Native (6)', '8': 'Ultra Kalite (8)', '10': 'Dengeli (10)', '12': 'Standart (12)', '14': 'Küçük (14)',
+        native: 'Native (6)', ultra: 'Ultra Kalite (8)', dengeli: 'Dengeli (10)', kucuk_dosya: 'Küçük (14)', web_optimize: 'Sadece Web Optimize (Kalite/FPS Değişmez)',
     };
     return map[p] || p || '—';
 }
@@ -1555,14 +1860,24 @@ function goToPage(page) {
 
 // ─── FILTERS ──────────────────────────────────────────────────────────────────
 function clearFilters() {
+    // #region agent log
+    _dbg({ location: 'video-dashboard.js:clearFilters', message: 'clearFilters called', data: { path: window.location.pathname, searchBefore: window.location.search }, hypothesisId: 'B' });
+    // #endregion
     AppState.filters = {};
     AppState.currentPage = 1;
     if (Els.searchInput) Els.searchInput.value = '';
     if (Els.searchInputTopBar) Els.searchInputTopBar.value = '';
-    Els.statusFilter.value = '';
-    Els.presetFilter.value = '';
+    if (Els.searchInputSidebar) Els.searchInputSidebar.value = '';
+    if (Els.statusFilter) Els.statusFilter.value = '';
+    if (Els.presetFilter) Els.presetFilter.value = '';
     if (Els.dateFrom) Els.dateFrom.value = '';
     if (Els.dateTo) Els.dateTo.value = '';
+    if (window.location.pathname === '/library') {
+        const params = new URLSearchParams(window.location.search);
+        params.delete('search');
+        const qs = params.toString();
+        history.replaceState({}, '', qs ? '/library?' + qs : '/library');
+    }
     loadVideos();
 }
 
@@ -1622,15 +1937,24 @@ async function loadMonitoringData() {
         if (appLogsBody) appLogsBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.alert + '</div><div class="bk-empty-state-title">Yükleniyor…</div></div>';
         if (bannedBody) bannedBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.inbox + '</div><div class="bk-empty-state-title">Yükleniyor…</div></div>';
         if (failedBody) failedBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.alert + '</div><div class="bk-empty-state-title">Yükleniyor…</div></div>';
+        const processingBody = document.getElementById('monitoringProcessingLogsBody');
+        const storageBody = document.getElementById('monitoringStorageLogsBody');
+        const agentHealthBody = document.getElementById('monitoringAgentHealthLogsBody');
+        if (processingBody) processingBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yükleniyor…</div></div>';
+        if (storageBody) storageBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yükleniyor…</div></div>';
+        if (agentHealthBody) agentHealthBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yükleniyor…</div></div>';
     };
     if (refreshBtn) refreshBtn.disabled = true;
     setPlaceholder();
 
     try {
-        const [statsRes, logsRes, appLogsRes] = await Promise.all([
+        const [statsRes, logsRes, appLogsRes, processingRes, storageRes, agentHealthRes] = await Promise.all([
             apiFetch('/api/security/stats?days=7'),
             apiFetch('/api/security/logs?limit=100'),
             apiFetch('/api/logs/app?limit=100').catch(() => ({ logs: [] })),
+            apiFetch('/api/logs/processing?limit=100').catch(() => ({ logs: [] })),
+            apiFetch('/api/logs/storage?limit=100').catch(() => ({ logs: [] })),
+            apiFetch('/api/logs/agent-health?limit=100').catch(() => ({ logs: [] })),
         ]);
 
         const c = statsRes.counts || {};
@@ -1643,7 +1967,11 @@ async function loadMonitoringData() {
         const appLogs = appLogsRes.logs || [];
         AppState.monitoringSecurityLogs = logs;
         AppState.monitoringAppLogs = appLogs;
+        AppState.monitoringProcessingLogs = processingRes.logs || [];
+        AppState.monitoringStorageLogs = storageRes.logs || [];
+        AppState.monitoringAgentHealthLogs = agentHealthRes.logs || [];
         renderMonitoringLogs();
+        renderMonitoringProcessingStorageAgentLogs();
 
         const failedRes = await apiFetch('/api/videos?status=failed&limit=50').catch(() => ({ data: [] }));
         const failedNormalized = failedRes.data ? fromVideoListDTO({ data: failedRes.data, total: failedRes.total || 0, per_page: failedRes.per_page || 50 }) : { videos: [] };
@@ -1712,6 +2040,12 @@ async function loadMonitoringData() {
         if (logsBody) logsBody.innerHTML = '<div class="bk-error-state"><div class="bk-error-state-title">Hata</div><div style="color:var(--text-muted)">' + escapeHtml(err.message) + '</div><button class="bk-error-retry" onclick="loadMonitoringData()">Tekrar Dene</button></div>';
         if (appLogsBody) appLogsBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yüklenemedi</div></div>';
         if (bannedBody) bannedBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yüklenemedi</div></div>';
+        const processingBody = document.getElementById('monitoringProcessingLogsBody');
+        const storageBody = document.getElementById('monitoringStorageLogsBody');
+        const agentHealthBody = document.getElementById('monitoringAgentHealthLogsBody');
+        if (processingBody) processingBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yüklenemedi</div></div>';
+        if (storageBody) storageBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yüklenemedi</div></div>';
+        if (agentHealthBody) agentHealthBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-title">Yüklenemedi</div></div>';
     } finally {
         if (refreshBtn) refreshBtn.disabled = false;
     }
@@ -1775,6 +2109,75 @@ function renderMonitoringLogs() {
                     <div class="table-cell cell-text"><span class="status-badge ${levelCls}">${escapeHtml(log.level || '—')}</span></div>
                     <div class="table-cell cell-text">${escapeHtml(log.action || '—')}</div>
                     <div class="table-cell cell-mono">${log.jobId ?? '—'}</div>
+                    <div class="table-cell cell-mono" style="font-size:11px">${escapeHtml(detail)}</div>
+                </div>`;
+            }).join('');
+        }
+    }
+}
+
+function renderMonitoringProcessingStorageAgentLogs() {
+    const processingBody = document.getElementById('monitoringProcessingLogsBody');
+    const storageBody = document.getElementById('monitoringStorageLogsBody');
+    const agentHealthBody = document.getElementById('monitoringAgentHealthLogsBody');
+    const processingLogs = AppState.monitoringProcessingLogs || [];
+    const storageLogs = AppState.monitoringStorageLogs || [];
+    const agentHealthLogs = AppState.monitoringAgentHealthLogs || [];
+
+    if (processingBody) {
+        if (!processingLogs.length) {
+            processingBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.inbox + '</div><div class="bk-empty-state-title">İşlem detay kaydı yok</div></div>';
+        } else {
+            processingBody.innerHTML = processingLogs.map(log => {
+                const time = log.createdAt ? new Date(log.createdAt).toLocaleString('tr-TR') : '—';
+                const errMsg = (log.errorMessage || '').slice(0, 80);
+                return `<div class="table-row" style="grid-template-columns: 1fr 0.8fr 1fr 0.8fr 0.8fr 1fr 2fr">
+                    <div class="table-cell cell-mono">${escapeHtml(time)}</div>
+                    <div class="table-cell cell-mono">${log.jobId ?? '—'}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.workerId || '—')}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.event || '—')}</div>
+                    <div class="table-cell cell-mono">${log.processingTimeSeconds ?? '—'}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.errorCode || '—')}</div>
+                    <div class="table-cell cell-mono" style="font-size:11px">${escapeHtml(errMsg || '—')}</div>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    if (storageBody) {
+        if (!storageLogs.length) {
+            storageBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.inbox + '</div><div class="bk-empty-state-title">Depolama kaydı yok</div></div>';
+        } else {
+            storageBody.innerHTML = storageLogs.map(log => {
+                const time = log.createdAt ? new Date(log.createdAt).toLocaleString('tr-TR') : '—';
+                const sizeStr = log.sizeBytes != null ? (log.sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : (log.dbSize != null && log.r2Size != null ? `DB:${(log.dbSize / 1024 / 1024).toFixed(2)} / R2:${(log.r2Size / 1024 / 1024).toFixed(2)}` : '—');
+                const reason = (log.reason || '').slice(0, 60);
+                return `<div class="table-row" style="grid-template-columns: 1fr 0.7fr 1fr 1fr 1.5fr 2fr">
+                    <div class="table-cell cell-mono">${escapeHtml(time)}</div>
+                    <div class="table-cell cell-mono">${log.jobId ?? '—'}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.eventType || '—')}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.bucket || '—')}</div>
+                    <div class="table-cell cell-mono">${escapeHtml(sizeStr)}</div>
+                    <div class="table-cell cell-mono" style="font-size:11px">${escapeHtml(reason)}</div>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    if (agentHealthBody) {
+        if (!agentHealthLogs.length) {
+            agentHealthBody.innerHTML = '<div class="bk-empty-state"><div class="bk-empty-state-icon" style="color:var(--text-subtle)">' + IC.inbox + '</div><div class="bk-empty-state-title">Ajan sağlık kaydı yok</div></div>';
+        } else {
+            agentHealthBody.innerHTML = agentHealthLogs.map(log => {
+                const time = log.createdAt ? new Date(log.createdAt).toLocaleString('tr-TR') : '—';
+                const detail = log.details && typeof log.details === 'object' ? JSON.stringify(log.details).slice(0, 80) : '';
+                return `<div class="table-row" style="grid-template-columns: 1fr 1.2fr 0.8fr 0.8fr 0.8fr 1fr 2fr">
+                    <div class="table-cell cell-mono">${escapeHtml(time)}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.workerId || '—')}</div>
+                    <div class="table-cell cell-mono">${escapeHtml(log.version || '—')}</div>
+                    <div class="table-cell cell-text">${escapeHtml(log.status || '—')}</div>
+                    <div class="table-cell cell-mono">${log.diskFreeMb ?? '—'}</div>
+                    <div class="table-cell cell-mono">${log.ramUsedPct != null ? log.ramUsedPct + '%' : '—'}</div>
                     <div class="table-cell cell-mono" style="font-size:11px">${escapeHtml(detail)}</div>
                 </div>`;
             }).join('');
@@ -2090,9 +2493,11 @@ function updateBulkActionUI() {
     const countEl = document.getElementById('bulkSelectedCountVideos');
     const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
     const bulkRetryBtn = document.getElementById('bulkRetryBtn');
+    const bulkMoveBtn = document.getElementById('bulkMoveBtn');
     if (bar) bar.hidden = count === 0;
     if (countEl) countEl.textContent = count;
     if (bulkDeleteBtn) bulkDeleteBtn.disabled = count === 0;
+    if (bulkMoveBtn) bulkMoveBtn.disabled = count === 0;
     const retryable = AppState.videos.filter(v => ['pending', 'uploaded', 'failed', 'processing', 'downloading', 'converting', 'uploading'].includes(v.status));
     const retryableSelected = retryable.filter(v => AppState.selectedVideoIds.has(String(v.id)));
     if (bulkRetryBtn) bulkRetryBtn.disabled = retryableSelected.length === 0;
@@ -2141,6 +2546,80 @@ async function bulkRetrySelected() {
 /** Seçilen tüm video job ID'lerini array olarak döndür (D1 Primary Key). */
 function getSelectedIds() {
     return Array.from(AppState.selectedVideoIds).map(id => String(id));
+}
+
+async function openBulkMoveModal() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) {
+        showNotification('Taşınacak video seçilmedi', 'warning');
+        return;
+    }
+    if (!AppState.folders?.length) await loadFolders();
+    const select = document.getElementById('bulkMoveFolderSelect');
+    if (!select) return;
+    const folders = AppState.folders || [];
+    select.innerHTML = '<option value="">Klasör seçin</option>' +
+        folders.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('');
+    select.value = '';
+    openModal('bulkMoveModal');
+}
+
+function closeBulkMoveModal() {
+    closeAllModals();
+}
+
+async function confirmBulkMove() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) {
+        showNotification('Taşınacak video seçilmedi', 'warning');
+        return;
+    }
+    const select = document.getElementById('bulkMoveFolderSelect');
+    const folderIdRaw = select?.value ?? '';
+    const folder_id = folderIdRaw === '' ? null : Number(folderIdRaw);
+    const confirmBtn = document.getElementById('bulkMoveConfirmBtn');
+    if (confirmBtn) confirmBtn.disabled = true;
+    try {
+        const res = await apiFetch('/api/videos/bulk-move', {
+            method: 'POST',
+            body: JSON.stringify({ ids, folder_id }),
+        });
+        const updated = res?.updated ?? ids.length;
+        const idSet = new Set(ids.map(id => String(id)));
+        AppState.videos = AppState.videos.filter(v => !idSet.has(String(v.id)));
+        ids.forEach(id => AppState.selectedVideoIds.delete(String(id)));
+        closeBulkMoveModal();
+        updateBulkActionUI();
+        removeMovedRowsWithAnimation(ids);
+        showNotification(`${updated} video taşındı`, 'success');
+    } catch (err) {
+        showNotification('Toplu taşıma başarısız: ' + (err?.message || String(err)), 'error');
+    } finally {
+        if (confirmBtn) confirmBtn.disabled = false;
+    }
+}
+
+/** Taşınan satırlara fade-out uygulayıp kaldırır, sonra tabloyu yeniden çizer. */
+function removeMovedRowsWithAnimation(ids) {
+    const tbody = getTableBody();
+    if (!tbody) {
+        renderVideosTable();
+        return;
+    }
+    const idSet = new Set(ids.map(id => String(id)));
+    const rows = Array.from(tbody.querySelectorAll('tr')).filter(tr => {
+        const vid = tr.getAttribute('data-video-id');
+        return vid && idSet.has(String(vid));
+    });
+    if (rows.length === 0) {
+        renderVideosTable();
+        return;
+    }
+    rows.forEach(tr => tr.classList.add('bulk-move-row-out'));
+    setTimeout(() => {
+        renderVideosTable();
+        renderPagination();
+    }, 280);
 }
 
 async function bulkDeleteSelected() {
@@ -2338,6 +2817,7 @@ async function viewVideoDetails(videoId) {
         : '—';
     const fileSizeMB = (video.file_size / 1_048_576).toFixed(1);
     const fileSizeGB = (video.file_size / 1_073_741_824).toFixed(2);
+    const outputBytes = video.file_size_output ?? video.bk?.file_size_output ?? 0;
     const STATUS_LABELS = { uploaded: 'Yüklendi', processing: 'İşleniyor', completed: 'Tamamlandı', failed: 'Başarısız' };
 
     const detailItem = (label, value) => `
@@ -2353,6 +2833,7 @@ async function viewVideoDetails(videoId) {
         ${detailItem('Durum', `<span class="status-badge status-${video.status}">${STATUS_LABELS[video.status] ?? video.status}</span>`)}
         ${detailItem('Render Preseti', video.render_preset === '720p_web' ? '720p Web Optimize' : '1080p Web Optimize')}
         ${detailItem('Boyut', `${fileSizeMB} MB (${fileSizeGB} GB)`)}
+        ${detailItem('İşlenmiş Boyut', outputBytes > 0 ? `${(outputBytes / 1_048_576).toFixed(2)} MB` : '—')}
         ${detailItem('Çözünürlük', video.resolution ?? '—')}
         ${detailItem('Yükleyen', escapeHtml(video.uploaded_by))}
         ${detailItem('Yükleme Tarihi', uploadDate)}
@@ -2400,6 +2881,7 @@ async function viewVideoDetails(videoId) {
             playerContainer.innerHTML = '<video class="bk-modal-video" controls autoplay playsinline style="width:100%;max-height:360px;border-radius:6px;background:#000;">Tarayıcınız video etiketini desteklemiyor.</video>';
             const videoEl = playerContainer.querySelector('video');
             videoEl.src = videoSrc;
+            videoEl.load(); // PLAY_01: Force load so playback starts reliably (avoids "black screen" illusion)
             videoEl.addEventListener('error', function onErr() {
                 playerContainer.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px;">
                     <span style="color:#dc2626;">Video yüklenemedi</span><br>
@@ -2787,7 +3269,10 @@ async function submitUrlImport() {
                 body: JSON.stringify({ url: urlVal, quality: preset, projectName: project, folder_id: folderId }),
             });
             closeAllModals();
-            showNotification(`Kuyruğa alındı: ${result.clean_name || urlVal}`, 'success');
+            const msg = result.job_count != null
+                ? `${result.job_count} video kuyruğa alındı`
+                : `Kuyruğa alındı: ${result.clean_name || urlVal}`;
+            showNotification(msg, 'success');
             loadVideos();
         }
     } catch (err) {
@@ -2952,20 +3437,8 @@ async function deleteUser(userId) {
     }
 }
 
-async function loadR2Stats() {
-    const widget = document.getElementById('r2Widget');
-    const el = document.getElementById('r2TotalBytes');
-    if (!widget || !el) return;
-    widget.style.display = 'none';
-    try {
-        const r = await apiFetch('/api/r2/stats');
-        const total = r?.total_storage_bytes ?? 0;
-        el.textContent = total >= 1e9 ? `${(total / 1e9).toFixed(1)} GB` : total >= 1e6 ? `${(total / 1e6).toFixed(1)} MB` : total >= 1e3 ? `${(total / 1e3).toFixed(1)} KB` : `${total} B`;
-        widget.style.display = 'grid';
-    } catch (_) {
-        el.textContent = '—';
-        widget.style.display = 'grid';
-    }
+function loadR2Stats() {
+    if (typeof renderR2StorageWidget === 'function') renderR2StorageWidget();
 }
 
 async function loadR2BucketList() {
@@ -3069,8 +3542,18 @@ async function purgeRawBucket() {
     try {
         const res = await apiFetch('/api/admin/purge-raw', { method: 'POST' });
         showNotification(res.message || 'RAW bucket boşaltıldı.', 'success');
+        // RAW sayacını anında sıfırla (temizlik bitti, dashboard anında 0 göstersin)
+        if (AppState.statistics) {
+            AppState.statistics.raw_usage_mb = 0;
+            if (AppState.statistics.summary) AppState.statistics.summary.raw_storage_bytes = 0;
+            if (typeof renderStatisticsUI === 'function') renderStatisticsUI();
+            if (typeof renderR2StorageWidget === 'function') renderR2StorageWidget();
+            updateNukeButtonVisibility();
+        }
         if (typeof loadR2BucketList === 'function') loadR2BucketList();
-        if (typeof loadR2Stats === 'function') loadR2Stats();
+        await loadStatistics();
+        if (typeof renderR2StorageWidget === 'function') renderR2StorageWidget();
+        updateNukeButtonVisibility();
     } catch (e) {
         showNotification(e.message || 'İşlem başarısız.', 'error');
     } finally {
@@ -3117,32 +3600,15 @@ Object.assign(window, {
     copyVideoUrl,
     toggleTheme,
     purgeRawBucket,
+    showNewFolderModal,
+    bulkDeleteSelected,
+    bulkRetrySelected,
+    loadDeletedVideos,
+    exportDeletedCsv,
+    bulkRestoreSelected,
+    bulkPurgeSelected,
+    dismissAlertBanner,
+    wakeServer,
 });
 
-// --- MANUEL EKLENEN NÜKLEER SİLME MANTIĞI ---
-document.addEventListener('DOMContentLoaded', () => {
-    const nukeBtn = document.getElementById('btnNukeRaw');
-    if (nukeBtn) {
-        nukeBtn.addEventListener('click', async () => {
-            const confirmNuke = confirm("DİKKAT! R2 RAW deposundaki TÜM işlenmemiş/ham videolar fiziksel olarak silinecek. Emin misin?");
-            if (!confirmNuke) return;
-            nukeBtn.innerText = "⏳ Siliniyor...";
-            nukeBtn.disabled = true;
-            try {
-                const response = await fetch('/api/admin/purge-raw', { method: 'POST' });
-                const data = await response.json();
-                if (data.success) {
-                    alert(data.message);
-                    window.location.reload();
-                } else {
-                    alert("HATA: " + data.error);
-                }
-            } catch (err) {
-                alert("Sistem Hatası: " + err);
-            } finally {
-                nukeBtn.innerText = "☢️ RAW Kutusunu Boşalt";
-                nukeBtn.disabled = false;
-            }
-        });
-    }
-});
+// UPLOAD_01: Nuke tek handler purgeRawBucket (onclick); duplicate listener kaldırıldı

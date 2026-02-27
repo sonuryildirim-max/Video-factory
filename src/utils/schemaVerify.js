@@ -13,8 +13,15 @@ const FIXES = [
     { sql: 'ALTER TABLE conversion_jobs ADD COLUMN checkpoint_updated_at DATETIME', name: 'checkpoint_updated_at' },
 ];
 
+const ERRORS_TABLE_SQL = "CREATE TABLE IF NOT EXISTS errors (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL DEFAULT (datetime('now')), message TEXT NOT NULL, status_code INTEGER NOT NULL DEFAULT 500, stack TEXT)";
+
 export async function ensureSchema(env) {
     if (!env?.DB) return;
+    try {
+        await env.DB.prepare(ERRORS_TABLE_SQL).run();
+    } catch (e) {
+        logger.warn('Schema errors table', { message: e?.message || String(e) });
+    }
     for (const fix of FIXES) {
         try {
             await env.DB.prepare(fix.sql).run();

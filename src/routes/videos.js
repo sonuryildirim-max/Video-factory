@@ -3,21 +3,25 @@
  */
 
 import { VideoService } from '../services/VideoService.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireRoot } from '../middleware/auth.js';
 import { CONFIG } from '../config/config.js';
 import { JOB_STATUS, QUEUED_STATUSES } from '../config/BK_CONSTANTS.js';
 import {
     handleError, jsonResponse, AuthError, BK_ERROR_CODES, AppError
 } from '../utils/errors.js';
 import { SecurityLogRepository } from '../repositories/SecurityLogRepository.js';
+import { ProcessingDetailLogRepository } from '../repositories/ProcessingDetailLogRepository.js';
+import { StorageLifecycleLogRepository } from '../repositories/StorageLifecycleLogRepository.js';
+import { AgentHealthLogRepository } from '../repositories/AgentHealthLogRepository.js';
 import { UserRepository } from '../repositories/UserRepository.js';
 import { MetricsRepository } from '../repositories/MetricsRepository.js';
 import { VideoDTO } from '../utils/dto.js';
 import { logger } from '../utils/logger.js';
+import { writeSystemLog } from '../utils/systemLog.js';
 import { handleBulkRoutes } from './videos/bulk.js';
 
 // Import Modular Routes
-import { routeGeneratePresignedUrl, routeDirectUpload, routeUploadComplete } from './video_modules/upload.js';
+import { routeGeneratePresignedUrl, routeDirectUpload, routeUploadComplete, routeMultipartUpload } from './video_modules/upload.js';
 import { routeImportFromUrl } from './video_modules/import.js';
 import {
     routeListVideos, routeGetVideo, routeUpdateVideo, routeDeleteVideo,
@@ -46,6 +50,10 @@ export async function handleVideoRoutes(request, env, ctx) {
         }
 
         // ── Auth-required routes ─────────────────────────────────────────────
+        if (path === '/api/upload' && method === 'POST') {
+            return await routeMultipartUpload(request, svc, env, ctx);
+        }
+
         if (path === '/api/videos/upload/presigned' && method === 'POST') {
             return await routeGeneratePresignedUrl(request, svc, env);
         }
@@ -114,6 +122,7 @@ export async function handleVideoRoutes(request, env, ctx) {
         }
 
         // ── Hetner agent endpoints ───────────────────────────────────────────
+        if (path === '/api/jobs/release-stale-startup' && method === 'POST') return await routeReleaseStaleStartup(request, svc, env);
         if (path === '/api/jobs/claim' && method === 'POST') return await routeClaimJob(request, svc, env);
         if (path === '/api/jobs/status' && method === 'POST') return await routeJobStatus(request, svc, env);
         if (path === '/api/jobs/presigned-upload' && method === 'POST') return await routePresignedUpload(request, svc, env);
@@ -191,13 +200,29 @@ async function routeUnstickJobs(request, svc, url, env) {
 
 // ─── Hetner agent endpoints ──────────────────────────────────────────────────
 
+async function routeReleaseStaleStartup(request, svc, env) {
+    assertWorkerAuth(request, env);
+    const body = await request.json().catch(() => ({}));
+    const workerId = body.worker_id || request.headers.get('x-worker-id') || '';
+    const result = await svc.releaseStaleJobsForWorker(workerId, 45);
+    return jsonResponse({ released_count: result.released_count });
+}
+
 async function routeClaimJob(request, svc, env) {
     assertWorkerAuth(request, env);
     await updateAgentLastActivity(request, env);
     const body = await request.json().catch(() => ({}));
     const workerId = body.worker_id || request.headers.get('x-worker-id') || 'unknown';
     const job = await svc.jobRepo.claimPendingJob(workerId);
-    if (job) await svc.jobRepo.updateWorkerActivity(workerId, job.id, 'ACTIVE');
+    if (job) {
+        await svc.jobRepo.updateWorkerActivity(workerId, job.id, 'ACTIVE');
+        if (env.DB) {
+            try {
+                const processingLog = new ProcessingDetailLogRepository(env.DB);
+                await processingLog.insert({ jobId: job.id, workerId, event: 'claimed' });
+            } catch (e) { logger.warn('ProcessingDetailLog insert (claim)', { message: e?.message }); }
+        }
+    }
     if (!job) return jsonResponse({ job: null, message: 'No pending jobs available' });
     let downloadUrl = null;
     if (job.r2_raw_key && job.r2_raw_key !== 'url-import-pending') {
@@ -233,6 +258,12 @@ async function routeUrlImportDone(request, svc, env) {
     const { job_id, worker_id, r2_raw_key, file_size_input } = body;
     const job = await svc.urlImportDone(job_id, worker_id, r2_raw_key, file_size_input || 0);
     await svc.jobRepo.updateWorkerActivity(worker_id, job_id, 'ACTIVE');
+    if (env.DB && r2_raw_key) {
+        try {
+            const storageLog = new StorageLifecycleLogRepository(env.DB);
+            await storageLog.insert({ jobId: job.id, eventType: 'r2_write', bucket: 'raw', key: r2_raw_key, sizeBytes: file_size_input || 0, reason: 'URL import upload' });
+        } catch (e) { logger.warn('StorageLifecycleLog insert (url-import-done)', { message: e?.message }); }
+    }
     return jsonResponse({ success: true, job_id: job.id, r2_raw_key });
 }
 
@@ -243,8 +274,27 @@ async function routeCompleteJob(request, svc, env) {
     const { job_id, worker_id, public_url, file_size_output, duration } = data;
     const job = await svc.jobRepo.completeJob(job_id, worker_id, data);
     await svc.jobRepo.updateWorkerActivity(worker_id, job_id, 'ACTIVE');
+    if (env.DB) {
+        try {
+            const processingLog = new ProcessingDetailLogRepository(env.DB);
+            await processingLog.insert({
+                jobId: job.id,
+                workerId: worker_id,
+                event: 'completed',
+                processingTimeSeconds: data?.processing_time_seconds ?? job.processing_time_seconds,
+                details: { file_size_output: data?.file_size_output ?? job.file_size_output, duration: data?.duration ?? job.duration }
+            });
+        } catch (e) { logger.warn('ProcessingDetailLog insert (complete)', { message: e?.message }); }
+        try {
+            const storageLog = new StorageLifecycleLogRepository(env.DB);
+            const outSize = data?.file_size_output ?? job.file_size_output;
+            if (outSize != null) await storageLog.insert({ jobId: job.id, eventType: 'r2_write', bucket: 'public', sizeBytes: outSize, reason: 'Transcode complete upload' });
+        } catch (e) { logger.warn('StorageLifecycleLog insert (complete)', { message: e?.message }); }
+    }
     if (CONFIG.DELETE_RAW_AFTER_PROCESSING && job.r2_raw_key && job.r2_raw_key !== 'url-import-pending') {
         await svc.deleteRawObjectIfExists(job.r2_raw_key);
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'Raw object deleted after complete', details: { ip, method: request.method, job_id: job.id, r2_raw_key: job.r2_raw_key } }).catch(() => {});
     }
     return jsonResponse({ success: true, job_id: job.id, uri: `/api/videos/${job.id}` });
 }
@@ -253,11 +303,26 @@ async function routeFailJob(request, svc, env) {
     assertWorkerAuth(request, env);
     await updateAgentLastActivity(request, env);
     const data = await request.json().catch(() => null);
-    const { job_id, worker_id, error_message, status } = data;
+    const { job_id, worker_id, error_message, status, error_code } = data;
     const finalStatus = status === JOB_STATUS.PENDING ? JOB_STATUS.PENDING : JOB_STATUS.FAILED;
     const job = await svc.jobRepo.failJob(job_id, worker_id, { error_message, status: finalStatus });
     await svc.jobRepo.updateWorkerActivity(worker_id, job_id, finalStatus);
+    if (env.DB) {
+        try {
+            const processingLog = new ProcessingDetailLogRepository(env.DB);
+            await processingLog.insert({
+                jobId: job.id,
+                workerId: worker_id,
+                event: 'failed',
+                errorCode: error_code || null,
+                errorMessage: error_message || job.error_message,
+                details: { retry_count: job.retry_count }
+            });
+        } catch (e) { logger.warn('ProcessingDetailLog insert (fail)', { message: e?.message }); }
+    }
     await svc.deleteRawObjectIfExists(job.r2_raw_key);
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    writeSystemLog(env, { level: 'INFO', category: 'R2', message: 'Raw object deleted after fail', details: { ip, method: request.method, job_id: job.id, r2_raw_key: job.r2_raw_key, error_message: error_message || job.error_message } }).catch(() => {});
     return jsonResponse({ success: true, job_id: job.id, status: job.status });
 }
 
@@ -302,8 +367,25 @@ async function routeHeartbeat(request, svc, env) {
     assertWorkerAuth(request, env);
     await updateAgentLastActivity(request, env);
     const data = await request.json().catch(() => ({}));
-    const { worker_id = 'unknown', status = 'ACTIVE' } = data;
-    await svc.jobRepo.updateWorkerHeartbeat(worker_id, { status });
+    const workerId = data.worker_id || request.headers.get('x-worker-id') || 'unknown';
+    const { status = 'ACTIVE', version, current_job_id, ip_address, disk_free_mb, ram_used_pct } = data;
+    const heartbeatData = { status, current_job_id, ip_address, version };
+    await svc.jobRepo.updateWorkerHeartbeat(workerId, heartbeatData);
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    writeSystemLog(env, { level: 'INFO', category: 'AGENT', message: 'Heartbeat', details: { ip, method: request.method, worker_id: workerId, status } }).catch(() => {});
+    if (env.DB) {
+        try {
+            const healthLog = new AgentHealthLogRepository(env.DB);
+            await healthLog.insert({
+                workerId,
+                version: version || null,
+                status,
+                diskFreeMb: disk_free_mb ?? null,
+                ramUsedPct: ram_used_pct ?? null,
+                details: { current_job_id: current_job_id ?? null, ip_address: ip_address || null },
+            });
+        } catch (e) { logger.warn('AgentHealthLog insert (heartbeat)', { message: e?.message }); }
+    }
     return jsonResponse({ success: true });
 }
 
@@ -349,13 +431,6 @@ async function routeGetStatus(request, svc, env) {
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────
 
-function jsonResponse(data, status = 200) {
-    return new Response(JSON.stringify(data), {
-        status,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
-}
-
 function normalizeQuality(q) {
     if (!q) return '';
     const s = String(q).toLowerCase();
@@ -366,13 +441,19 @@ function normalizeQuality(q) {
 
 function notifyAgentWakeup(env, ctx) {
     const url = env.AGENT_WAKE_URL;
-    if (url && ctx?.waitUntil) ctx.waitUntil(fetch(url, { method: 'POST' }).catch(() => { }));
+    if (!url) return;
+    const token = getAgentBearerToken(env);
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    if (ctx?.waitUntil) ctx.waitUntil(fetch(url, { method: 'POST', headers }).catch(() => { }));
+    else fetch(url, { method: 'POST', headers }).catch(() => { });
 }
 
 async function doAgentWakeup(env) {
     const url = env.AGENT_WAKE_URL;
     if (!url) return { ok: false };
-    const r = await fetch(url, { method: 'POST' });
+    const token = getAgentBearerToken(env);
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const r = await fetch(url, { method: 'POST', headers });
     return { ok: r.ok };
 }
 

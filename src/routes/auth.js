@@ -12,6 +12,7 @@ import { isIpBanned, checkRateLimit, incrementFailedAttempts, resetFailedAttempt
 import { SECURITY_HEADERS } from '../config/constants.js';
 import { verifyPassword } from '../utils/password.js';
 import { logger } from '../utils/logger.js';
+import { writeSystemLog } from '../utils/systemLog.js';
 
 async function writeSecurityLog(env, request, ip, action, status, details, createdBy) {
     if (!env.DB) return;
@@ -44,6 +45,7 @@ export async function handleAuthRoutes(request, env, ctx) {
     // POST /api/login — D1 users table, returns token
     if (request.method === 'POST' && url.pathname === '/api/login') {
         if (!env.DB) {
+            if (ctx?.waitUntil) ctx.waitUntil(writeSystemLog(env, { level: 'ERROR', category: 'AUTH', message: 'Login failed (DB not configured)', details: { ip, method: request.method, path: url.pathname } }));
             return Response.json({ error: 'Kullanıcı adı veya şifre hatalı.' }, { status: 401 });
         }
 
@@ -98,6 +100,7 @@ export async function handleAuthRoutes(request, env, ctx) {
                 ctx.waitUntil(writeSecurityLog(env, request, ip, 'BANNED', 'banned', { userAgent, reason: 'brute_force' }));
                 return Response.json({ error: 'Cok fazla basarisiz deneme. 1 saat engellendi.', banned: true }, { status: 403 });
             }
+            if (ctx?.waitUntil) ctx.waitUntil(writeSystemLog(env, { level: 'ERROR', category: 'AUTH', message: 'Kullanıcı adı veya şifre hatalı.', details: { ip, method: request.method, path: url.pathname } }));
             return Response.json({ error: 'Kullanıcı adı veya şifre hatalı.' }, { status: 401 });
         }
 
@@ -114,6 +117,7 @@ export async function handleAuthRoutes(request, env, ctx) {
                 ctx.waitUntil(writeSecurityLog(env, request, ip, 'BANNED', 'banned', { userAgent, reason: 'brute_force' }));
                 return Response.json({ error: 'Cok fazla basarisiz deneme. 1 saat engellendi.', banned: true }, { status: 403 });
             }
+            if (ctx?.waitUntil) ctx.waitUntil(writeSystemLog(env, { level: 'ERROR', category: 'AUTH', message: 'Kullanıcı adı veya şifre hatalı.', details: { ip, method: request.method, path: url.pathname } }));
             return Response.json({ error: 'Kullanıcı adı veya şifre hatalı.' }, { status: 401 });
         }
 
@@ -150,6 +154,7 @@ export async function handleAuthRoutes(request, env, ctx) {
     if (request.method === 'GET' && url.pathname === '/api/me') {
         const authResult = await authService.verifyAuth(request);
         if (!authResult || !authResult.valid) {
+            if (ctx?.waitUntil) ctx.waitUntil(writeSystemLog(env, { level: 'ERROR', category: 'AUTH', message: 'Yetkisiz erisim', details: { ip, method: request.method, path: url.pathname } }));
             return Response.json({ error: 'Yetkisiz erisim' }, { status: 401, headers: SECURITY_HEADERS });
         }
         return Response.json({

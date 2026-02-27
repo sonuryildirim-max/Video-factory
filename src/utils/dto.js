@@ -10,6 +10,7 @@
  */
 
 import { JOB_STATUS } from '../config/BK_CONSTANTS.js';
+import { normalizePublicUrl } from './urls.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ export class VideoDTO {
 
         const profile    = QUALITY_PROFILE[job.quality] || QUALITY_PROFILE['720p'];
         const isComplete = job.status === JOB_STATUS.COMPLETED;
+        const publicUrl  = normalizePublicUrl(job.public_url || '');
         const compressionRatio =
             job.file_size_input && job.file_size_output
                 ? Math.round((1 - job.file_size_output / job.file_size_input) * 100)
@@ -73,6 +75,7 @@ export class VideoDTO {
             name:         job.original_name,
             description:  job.notes || '',
             type:         'video',
+            crf:          job.crf ?? null,
 
             // ── Timestamps ───────────────────────────────────────────────────
             created_time:  isoOrNull(job.created_at),
@@ -96,15 +99,15 @@ export class VideoDTO {
             },
 
             // ── Renditions / Files (R2 public bucket URL) ──────────────────────
-            // Only present when transcode.status === 'complete'
-            files: isComplete && job.public_url
+            // Only present when transcode.status === 'complete'; PLAY_01: normalized URL
+            files: isComplete && publicUrl
                 ? [{
                     quality:       job.quality,
                     rendition:     profile.rendition,
                     type:          'video/mp4',
                     width:         job.resolution ? parseInt(job.resolution.split('x')[0]) : profile.width,
                     height:        job.resolution ? parseInt(job.resolution.split('x')[1]) : profile.height,
-                    link:          job.public_url,
+                    link:          publicUrl,
                     link_expiry:   null,
                     created_time:  isoOrNull(job.completed_at),
                     fps:           job.frame_rate   || 30,
@@ -165,7 +168,7 @@ export class VideoDTO {
                 original_name:           job.original_name,
                 clean_name:              job.clean_name,
                 r2_raw_key:              job.r2_raw_key,
-                public_url:              job.public_url,
+                public_url:              publicUrl,
                 quality:                 job.quality,
                 status:                  job.status,
                 worker_id:               job.worker_id,
@@ -185,7 +188,8 @@ export class VideoDTO {
                 thumbnail_url:           job.thumbnail_key ? `${cdnBase}/${job.thumbnail_key}` : null, // mirrors root thumbnail_url
                 deleted_at:              job.deleted_at              || null,
                 view_count:              job.view_count ?? 0,
-                processing_profile:      job.processing_profile      || 'crf_14',
+                processing_profile:      job.processing_profile      || '12',
+                crf:                     job.crf ?? null,
                 download_progress:       job.download_progress ?? 0,
                 download_bytes:          job.download_bytes ?? 0,
                 download_total:          job.download_total ?? 0,
@@ -276,31 +280,36 @@ export class UploadLinkDTO {
 
 /**
  * StatisticsDTO — dashboard statistics response.
+ * When r2Real is provided, storage fields are from R2 S3 API (source of truth); sync_error marks D1/R2 mismatch.
  */
 export class StatisticsDTO {
     /**
      * @param {Object} summary    - From JobRepository.getStatistics()
      * @param {Array}  activity   - From JobRepository.getRecentActivity()
-     * @param {Array}  uploaders  - From JobRepository.getTopUploaders()
+     * @param {Array}  uploaders - From JobRepository.getTopUploaders()
+     * @param {Object} [r2Real]   - From R2RealStatsService: { raw_usage_mb, public_usage_mb, total_real_r2, sync_error }
      */
-    static build(summary, activity = [], uploaders = []) {
+    static build(summary, activity = [], uploaders = [], r2Real = null) {
         const total = summary.total_jobs || 0;
         const pct   = (n) => total > 0 ? Math.round((n / total) * 100) : 0;
         const rawBytes  = summary.total_input_size  ?? 0;
         const pubBytes  = summary.total_output_size ?? 0;
+        const useR2 = r2Real && (r2Real.raw_usage_mb != null || r2Real.public_usage_mb != null);
+        const rawBytesFinal  = useR2 ? (r2Real.raw_usage_mb ?? 0) * 1024 * 1024 : rawBytes;
+        const pubBytesFinal  = useR2 ? (r2Real.public_usage_mb ?? 0) * 1024 * 1024 : pubBytes;
 
-        return {
+        const out = {
             summary: {
                 total_videos:          total,
                 completed:             summary.completed_jobs        || 0,
                 processing:            summary.processing_jobs       || 0,
                 failed:                summary.failed_jobs           || 0,
                 pending:               summary.pending_jobs          || 0,
-                uploaded:              (summary.pending_uploaded_jobs ?? summary.pending_jobs ?? 0) + (summary.url_import_queued_jobs || 0),  // UI "Yüklendi" = PENDING with upload confirmed + URL_IMPORT_QUEUED
+                uploaded:              (summary.pending_uploaded_jobs ?? summary.pending_jobs ?? 0) + (summary.url_import_queued_jobs || 0),
                 total_savings_bytes:   summary.total_savings_bytes   ?? 0,
-                total_storage_bytes:   rawBytes + pubBytes,
-                raw_storage_bytes:     rawBytes,
-                public_storage_bytes:  pubBytes,
+                total_storage_bytes:   rawBytesFinal + pubBytesFinal,
+                raw_storage_bytes:     rawBytesFinal,
+                public_storage_bytes:  pubBytesFinal,
                 avg_processing_time:   Math.round(summary.avg_processing_time || 0),
                 unique_uploaders:      uploaders.length,
                 preset_720p:           summary.quality_720p_count  || 0,
@@ -321,5 +330,12 @@ export class StatisticsDTO {
                 total_size:   u.total_size_input || 0,
             })),
         };
+        if (r2Real) {
+            out.raw_usage_mb = r2Real.raw_usage_mb ?? 0;
+            out.public_usage_mb = r2Real.public_usage_mb ?? 0;
+            out.total_real_r2 = r2Real.total_real_r2 ?? 0;
+            out.sync_error = !!r2Real.sync_error;
+        }
+        return out;
     }
 }

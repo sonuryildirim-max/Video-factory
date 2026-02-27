@@ -11,7 +11,14 @@
     "test:run": "vitest run",
     "setup-r2-lifecycle": "node scripts/setup-r2-lifecycle.js"
   },
-  "keywords": ["cloudflare", "workers", "r2", "d1", "video", "bilge-karga"],
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "r2",
+    "d1",
+    "video",
+    "bilge-karga"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {

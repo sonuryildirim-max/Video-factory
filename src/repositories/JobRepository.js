@@ -54,28 +54,23 @@ function sanitizeFTSQuery(query) {
 }
 
 /**
- * Run multiple statements in a single atomic transaction (BEGIN ... COMMIT).
- * On failure, ROLLBACK is executed and the error is rethrown.
- * D1: uses batch() with BEGIN/COMMIT; rollback on error.
+ * Run multiple statements in a single atomic transaction.
+ * D1: batch() is already a transaction (all or nothing; no explicit BEGIN/COMMIT).
+ * Using SQL BEGIN/COMMIT causes: "use state.storage.transaction() instead of BEGIN TRANSACTION".
  * @param {D1Database} db - D1 database binding
  * @param {Array<D1PreparedStatement>} statements - Prepared statements (with bind already applied)
- * @returns {Promise<D1Result[]>} Results for each statement (excluding BEGIN/COMMIT)
+ * @returns {Promise<D1Result[]>} Results for each statement
  */
 async function runInTransaction(db, statements) {
-    const withBoundaries = [
-        db.prepare('BEGIN'),
-        ...statements,
-        db.prepare('COMMIT')
-    ];
-    try {
-        const results = await db.batch(withBoundaries);
-        return results;
-    } catch (e) {
-        try {
-            await db.batch([db.prepare('ROLLBACK')]);
-        } catch (_) { /* ignore rollback failure */ }
-        throw e;
-    }
+    return await db.batch(statements);
+}
+
+function toDbError(e, context) {
+    logger.error(context, { message: e?.message });
+    const err = new AppError('Veritabanı işlemi başarısız', 500, 'INTERNAL');
+    err.errorCode = BK_ERROR_CODES.INTERNAL;
+    err.developerMessage = e?.message;
+    throw err;
 }
 
 export class JobRepository {
@@ -110,19 +105,25 @@ export class JobRepository {
         const uploader = uploaded_by || 'admin';
         const creator = created_by ?? uploader;
 
+        const VALID_CRF = [6, 8, 10, 12, 14];
+        const isWebOpt = processing_profile === 'web_opt' || processing_profile === 'web_optimize';
+        const profileDisplay = isWebOpt ? 'web_opt' : (processing_profile || '12');
+        const crfValue = isWebOpt ? null : (VALID_CRF.includes(Number(processing_profile)) ? Number(processing_profile) : 12);
+
         const result = await this.db.prepare(`
             INSERT INTO conversion_jobs (
                 original_name, clean_name, r2_raw_key, quality, 
-                file_size_input, processing_profile, uploaded_by, created_by, tags, project_name, notes,
+                file_size_input, processing_profile, crf, uploaded_by, created_by, tags, project_name, notes,
                 source_url, folder_id, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
             original_name,
             clean_name,
             r2_raw_key || 'url-import-pending',
             quality,
             file_size_input || 0,
-            processing_profile || 'crf_14',
+            profileDisplay,
+            crfValue,
             uploader,
             creator,
             tags || '',
@@ -558,10 +559,14 @@ export class JobRepository {
      * @returns {Promise<Object|null>} Job or null if not found
      */
     async getById(jobId) {
-        return await this.db.prepare(`
-            SELECT * FROM conversion_jobs
-            WHERE id = ?
-        `).bind(jobId).first();
+        try {
+            return await this.db.prepare(`
+                SELECT * FROM conversion_jobs
+                WHERE id = ?
+            `).bind(jobId).first();
+        } catch (e) {
+            toDbError(e, 'JobRepository.getById');
+        }
     }
 
     /**
@@ -573,10 +578,35 @@ export class JobRepository {
         if (!ids?.length) return [];
         const nums = ids.map(id => parseInt(id, 10)).filter(n => !isNaN(n));
         if (!nums.length) return [];
-        const placeholders = nums.map(() => '?').join(',');
-        const stmt = this.db.prepare(`SELECT * FROM conversion_jobs WHERE id IN (${placeholders})`);
-        const result = await stmt.bind(...nums).all();
-        return result?.results ?? [];
+        try {
+            const placeholders = nums.map(() => '?').join(',');
+            const stmt = this.db.prepare(`SELECT * FROM conversion_jobs WHERE id IN (${placeholders})`);
+            const result = await stmt.bind(...nums).all();
+            return result?.results ?? [];
+        } catch (e) {
+            toDbError(e, 'JobRepository.getByIds');
+        }
+    }
+
+    /**
+     * Update folder_id for multiple jobs (bulk move). Only non-deleted jobs are updated.
+     * @param {Array<string|number>} jobIds - Job IDs to update
+     * @param {number|null} folderId - Target folder ID, or null for root
+     * @returns {Promise<{ updated: number }>}
+     */
+    async updateFolderForJobs(jobIds, folderId) {
+        if (!jobIds?.length) return { updated: 0 };
+        const nums = jobIds.map(id => parseInt(id, 10)).filter(n => !isNaN(n));
+        if (!nums.length) return { updated: 0 };
+        try {
+            const placeholders = nums.map(() => '?').join(',');
+            const sql = `UPDATE conversion_jobs SET folder_id = ? WHERE id IN (${placeholders}) AND (deleted_at IS NULL)`;
+            const result = await this.db.prepare(sql).bind(folderId ?? null, ...nums).run();
+            const updated = result?.meta?.changes ?? 0;
+            return { updated };
+        } catch (e) {
+            toDbError(e, 'JobRepository.updateFolderForJobs');
+        }
     }
 
     /**
@@ -600,7 +630,8 @@ export class JobRepository {
             sort_by = 'created_at',
             sort_order = 'DESC',
             include_deleted = false,
-            cursor
+            cursor,
+            offset: offsetParam
         } = filters;
 
         const whereClauses = [];
@@ -629,10 +660,10 @@ export class JobRepository {
             params.push(uploaded_by);
         }
 
-        if (folder_id != null && folder_id > 0) {
-            whereClauses.push('folder_id = ?');
-            params.push(folder_id);
-        }
+        // SQL injection safe: binding ile folder_id; null ise tümü, değilse o klasör
+        whereClauses.push('(folder_id = ? OR ? IS NULL)');
+        params.push(folder_id, folder_id);
+        logger.debug('D1 binding folder_id (2x)', { folder_id });
 
         if (search) {
             whereClauses.push('(original_name LIKE ? OR clean_name LIKE ? OR tags LIKE ? OR project_name LIKE ? OR notes LIKE ?)');
@@ -676,7 +707,9 @@ export class JobRepository {
         const totalCount = countResult.total || 0;
         const totalPages = Math.ceil(totalCount / limit) || 1;
         const fetchLimit = useCursor ? limit + 1 : limit;
-        const offset = useCursor ? 0 : (page - 1) * limit;
+        const useOffsetParam = !useCursor && offsetParam !== undefined && offsetParam !== null && Number.isFinite(offsetParam) && offsetParam >= 0;
+        const offset = useCursor ? 0 : (useOffsetParam ? offsetParam : (page - 1) * limit);
+        const effectivePage = useOffsetParam ? Math.floor(offset / limit) + 1 : page;
 
         const orderById = cursorSortKey !== 'id' ? `, id ${sortOrder}` : '';
         const dataResult = await this.db.prepare(`
@@ -698,7 +731,7 @@ export class JobRepository {
         return {
             jobs,
             totalCount,
-            page: useCursor ? null : page,
+            page: useCursor ? null : effectivePage,
             totalPages: useCursor ? null : totalPages,
             limit,
             next_cursor
@@ -831,14 +864,14 @@ export class JobRepository {
         ];
         try {
             const results = await runInTransaction(this.db, statementsWithFts);
-            const lastResult = results[results.length - 2];
+            const lastResult = results[results.length - 1];
             return (lastResult?.meta?.changes || 0) > 0;
         } catch (e) {
             const msg = e?.message || String(e);
             if (msg.includes('conversion_jobs_fts') || msg.includes('no such table')) {
                 try {
                     const results = await runInTransaction(this.db, statementsNoFts);
-                    const lastResult = results[results.length - 2];
+                    const lastResult = results[results.length - 1];
                     return (lastResult?.meta?.changes || 0) > 0;
                 } catch (e2) {
                     throw new AppError(`D1 hard delete failed (job ${id}): ${e2?.message || e2}`, 500, 'D1_DELETE_FAILED');
@@ -1119,6 +1152,25 @@ export class JobRepository {
     }
 
     /**
+     * Get storage keys from D1 for R2 sync check (raw keys + public_url for deriving public keys).
+     * @returns {Promise<{ rawKeys: string[], publicUrls: string[] }>}
+     */
+    async getStorageKeysForStats() {
+        const rows = await this.db.prepare(`
+            SELECT r2_raw_key, public_url FROM conversion_jobs
+            WHERE deleted_at IS NULL AND status != ?
+        `).bind(JOB_STATUS.DELETED).all();
+        const results = rows.results || rows || [];
+        const rawKeys = [];
+        const publicUrls = [];
+        for (const r of results) {
+            if (r.r2_raw_key && r.r2_raw_key !== '' && r.r2_raw_key !== 'url-import-pending') rawKeys.push(r.r2_raw_key);
+            if (r.public_url && String(r.public_url).trim()) publicUrls.push(String(r.public_url).trim());
+        }
+        return { rawKeys, publicUrls };
+    }
+
+    /**
      * Update worker heartbeat
      * @param {string} workerId - Worker identifier
      * @param {Object} heartbeatData - Heartbeat data
@@ -1140,6 +1192,60 @@ export class JobRepository {
             ORDER BY wh.last_heartbeat DESC
         `).all();
         return rows.results || [];
+    }
+
+    /**
+     * Get workers that sent heartbeat within the last N minutes (for /status).
+     * Includes ip_address and current_job_id. Returns one row per worker (most recent).
+     * @param {number} withinMinutes - e.g. 5
+     * @returns {Promise<Array<{worker_id: string, last_heartbeat: string, status: string, ip_address: string, current_job_id: number|null}>>}
+     */
+    async getRecentWorkerHeartbeats(withinMinutes = 5) {
+        const rows = await this.db.prepare(`
+            SELECT wh.worker_id, wh.last_heartbeat, wh.status, wh.ip_address, wh.current_job_id
+            FROM worker_heartbeats wh
+            INNER JOIN (
+                SELECT worker_id, MAX(id) as max_id
+                FROM worker_heartbeats
+                GROUP BY worker_id
+            ) latest ON wh.worker_id = latest.worker_id AND wh.id = latest.max_id
+            WHERE wh.last_heartbeat >= datetime('now', ?)
+            ORDER BY wh.last_heartbeat DESC
+        `).bind(`-${Number(withinMinutes) || 5} minutes`).all();
+        return rows.results || [];
+    }
+
+    /**
+     * Get today's job metrics: completed and failed counts (UTC date).
+     * @returns {Promise<{ completedToday: number, failedToday: number }>}
+     */
+    async getTodayJobMetrics() {
+        const completed = await this.db.prepare(`
+            SELECT COUNT(*) as c FROM conversion_jobs
+            WHERE status = ? AND date(completed_at) = date('now') AND deleted_at IS NULL
+        `).bind(JOB_STATUS.COMPLETED).first();
+        const failed = await this.db.prepare(`
+            SELECT COUNT(*) as c FROM conversion_jobs
+            WHERE status = ? AND date(updated_at) = date('now') AND deleted_at IS NULL
+        `).bind(JOB_STATUS.FAILED).first();
+        return {
+            completedToday: completed?.c ?? 0,
+            failedToday: failed?.c ?? 0,
+        };
+    }
+
+    /**
+     * Get average processing time in seconds for jobs completed today (UTC date).
+     * Uses processing_time_seconds when set; otherwise 0 for that row (included in count).
+     * @returns {Promise<number>}
+     */
+    async getTodayAvgProcessingTimeSeconds() {
+        const row = await this.db.prepare(`
+            SELECT AVG(processing_time_seconds) as avg_sec FROM conversion_jobs
+            WHERE status = ? AND date(completed_at) = date('now') AND deleted_at IS NULL AND processing_time_seconds IS NOT NULL
+        `).bind(JOB_STATUS.COMPLETED).first();
+        const avg = row?.avg_sec;
+        return avg != null && !Number.isNaN(Number(avg)) ? Math.round(Number(avg)) : 0;
     }
 
     async updateWorkerHeartbeat(workerId, heartbeatData) {

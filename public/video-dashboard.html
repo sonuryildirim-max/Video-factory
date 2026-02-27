@@ -8,7 +8,7 @@
         href="https://static.ticimax.cloud/31817/uploads/editoruploads/bilgekarga-image/bilge-karga.png">
     <script src="dashboard-init.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <title>Video — Bilge Karga</title>
+    <title>Video — Bilge Karga Video</title>
     <link rel="stylesheet" href="css/dashboard.css">
 </head>
 
@@ -98,6 +98,10 @@
             <polyline points="1 4 1 10 7 10" />
             <path d="M3.51 15a9 9 0 1 0 .49-4.53" />
         </symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        </symbol>
         <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -184,7 +188,7 @@
         </button>
         <a href="#" class="nav-brand">
             <span class="nav-brand-dot"></span>
-            BilgeKarga Video Factory
+            Bilge Karga Video
         </a>
         <div class="nav-divider nav-divider-desktop"></div>
         <div class="nav-links">
@@ -254,8 +258,9 @@
                 </svg>
                 Yükle
             </button>
-            <button id="btnNukeRaw"
-                style="background-color: #ef4444; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold; border: none; cursor: pointer; margin-left: 10px;">
+            <button id="btnNukeRaw" type="button" onclick="purgeRawBucket()"
+                style="display:none; background-color: #ef4444; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold; border: none; cursor: pointer; margin-left: 10px;"
+                title="R2 RAW deposunu boşalt (root only, raw varsa görünür)">
                 ☢️ RAW Kutusunu Boşalt
             </button>
         </div>
@@ -319,6 +324,14 @@
                         <line x1="17" y1="2" x2="17" y2="22" />
                         <line x1="2" y1="12" x2="22" y2="12" />
                     </svg><span class="bk-sidebar-label">Library</span></a>
+                <div class="sidebar-search-wrapper" id="sidebarSearchWrapper">
+                    <div class="search-wrapper">
+                        <svg class="search-icon" width="14" height="14">
+                            <use href="#i-search" />
+                        </svg>
+                        <input type="search" id="searchInputSidebar" class="search-input" placeholder="Video veya ürün ara…" aria-label="Video veya ürün ara">
+                    </div>
+                </div>
                 <div id="sidebarFoldersContainer" class="sidebar-sub-list"></div>
                 <a href="/folders" id="bkSidebarFolders"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
@@ -361,8 +374,8 @@
                 <div class="bk-topbar-spacer"></div>
                 <div class="search-wrapper bk-topbar-search"><svg class="search-icon" width="14" height="14">
                         <use href="#i-search" />
-                    </svg><input type="text" id="searchInputTopBar" class="search-input" placeholder="Video ara…"
-                        aria-label="Ara"></div>
+                    </svg><input type="search" id="searchInputTopBar" class="search-input" placeholder="Video veya ürün ara…"
+                        aria-label="Video veya ürün ara"></div>
                 <button class="btn btn-primary" onclick="window.location.href='video-upload.html'"><svg width="14"
                         height="14">
                         <use href="#i-upload" />
@@ -378,7 +391,7 @@
                             <use href="#i-x" />
                         </svg>
                     </button>
-                    <div class="alert-title" id="alert-main-title">KRİTİK SİSTEM UYARISI</div>
+                    <div class="alert-title" id="alert-main-title">Önemli uyarı</div>
                     <div id="dynamic-alert-content">
                         <div id="api-injection-slot" class="alert-line" style="color: #fbbf24; margin-bottom: 8px;">
                         </div>
@@ -541,20 +554,33 @@
                                 <div id="topViewedList" class="top-viewed-list"></div>
                             </div>
 
-                            <!-- R2 Admin widget (root only) -->
-                            <div id="r2Widget" class="stats-grid"
-                                style="display:none;grid-template-columns:1fr auto;margin-bottom:24px">
-                                <div class="stat-card" style="max-width:400px">
-                                    <div class="stat-card-header">
-                                        <span class="stat-label">R2 RAW + Public (root)</span>
-                                        <svg class="stat-icon" width="16" height="16">
-                                            <use href="#i-database" />
-                                        </svg>
+                            <!-- R2 Storage (root only): RAW + PUBLIC canlı veri -->
+                            <div id="r2Widget" class="r2-storage-widget" style="display:none;margin-bottom:24px">
+                                <div class="r2-storage-cards">
+                                    <div class="stat-card r2-storage-card">
+                                        <div class="stat-card-header">
+                                            <span class="stat-label">RAW (Geçici Depo)</span>
+                                            <svg class="stat-icon" width="16" height="16">
+                                                <use href="#i-database" />
+                                            </svg>
+                                        </div>
+                                        <div class="stat-value" id="r2RawUsageMb">—</div>
+                                        <button type="button" class="btn btn-danger-ghost btn-nuke-widget" id="btnNukeRawWidget" onclick="purgeRawBucket()" style="display:none;margin-top:8px;">
+                                            ☢️ Nuke Uygula
+                                        </button>
                                     </div>
-                                    <div class="stat-value" id="r2TotalBytes">—</div>
-                                    <div class="stat-trend trend-neutral">D1 job tabanlı</div>
+                                    <div class="stat-card r2-storage-card">
+                                        <div class="stat-card-header">
+                                            <span class="stat-label">PUBLIC (Dağıtım)</span>
+                                            <svg class="stat-icon" width="16" height="16">
+                                                <use href="#i-database" />
+                                            </svg>
+                                        </div>
+                                        <div class="stat-value" id="r2PublicUsageMb">—</div>
+                                    </div>
                                 </div>
-                                <div class="stat-card" style="display:flex;align-items:center;padding:20px">
+                                <div class="r2-storage-note">⚠️ Canlı R2 Verisi (D1'den bağımsız)</div>
+                                <div class="r2-storage-actions">
                                     <button class="btn btn-ghost" id="r2PurgeBtn" onclick="r2Purge()"
                                         title="3+ günden eski FAILED/PENDING işleri temizle">
                                         <svg width="14" height="14">
@@ -565,13 +591,31 @@
                                 </div>
                             </div>
 
+                            <!-- Çoklu video yükle (FormData → /api/upload) -->
+                            <div class="multi-upload-section" style="margin-bottom:20px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
+                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;">
+                                    <label class="btn btn-ghost" style="margin:0;cursor:pointer;">
+                                        <svg width="14" height="14" style="vertical-align:middle;margin-right:6px"><use href="#i-upload"/></svg>
+                                        Dosya seç
+                                        <input type="file" id="multiUploadFileInput" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm" multiple style="display:none">
+                                    </label>
+                                    <select id="multiUploadFolderId" class="filter-select" style="min-width:180px" aria-label="Yükleme klasörü">
+                                        <option value="">Klasör seçin (opsiyonel)</option>
+                                    </select>
+                                    <button type="button" class="btn btn-primary" id="multiUploadBtn" onclick="submitMultiUpload()" disabled>
+                                        Yükle
+                                    </button>
+                                    <span id="multiUploadStatus" style="font-size:13px;color:var(--text-muted)"></span>
+                                </div>
+                            </div>
+
                             <!-- Toolbar / filters -->
                             <div class="toolbar">
                                 <div class="search-wrapper">
                                     <svg class="search-icon" width="14" height="14">
                                         <use href="#i-search" />
                                     </svg>
-                                    <input type="text" id="searchInput" class="search-input" placeholder="Video ara…">
+                                    <input type="search" id="searchInput" class="search-input" placeholder="Video veya ürün ara…" aria-label="Video veya ürün ara">
                                 </div>
                                 <select id="statusFilter" class="filter-select">
                                     <option value="">Tüm durumlar</option>
@@ -612,6 +656,21 @@
                                     </svg>
                                     Seçilenleri yeniden işle
                                 </button>
+                                <button class="btn btn-ghost" id="bulkMoveBtn" onclick="openBulkMoveModal()">
+                                    <svg width="14" height="14">
+                                        <use href="#i-folder" />
+                                    </svg>
+                                    Toplu Taşı
+                                </button>
+                            </div>
+                            <!-- Sayfa başı (above table) -->
+                            <div class="toolbar" style="margin-bottom:8px;align-items:center;gap:8px">
+                                <label for="pageSize" style="font-size:13px;color:var(--text-muted)">Sayfa başı</label>
+                                <select id="pageSize" class="filter-select" aria-label="Sayfa başına kayıt">
+                                    <option value="25" selected>25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                </select>
                             </div>
                             <!-- Table: 11 sütun (Checkbox, Thumbnail, Video, İzlenme, Preset, Çözünürlük, Boyut, Kazanç, Süre, Tarih, İşlem) -->
                             <table class="videos-table">
@@ -621,18 +680,23 @@
                                                 title="Tümünü seç"></th>
                                         <th>Thumbnail</th>
                                         <th>Video</th>
-                                        <th>İzlenme</th>
-                                        <th>Preset</th>
-                                        <th>Çözünürlük</th>
-                                        <th>Boyut</th>
+                                        <th class="sort-header" data-sort="view_count">İzlenme</th>
+                                        <th class="sort-header" data-sort="quality">Preset</th>
+                                        <th class="sort-header" data-sort="quality">Çözünürlük</th>
+                                        <th class="sort-header" data-sort="file_size_input">Boyut</th>
                                         <th>Kazanç (%)</th>
-                                        <th>Süre</th>
+                                        <th class="sort-header" data-sort="duration">Süre</th>
                                         <th class="sort-header" data-sort="created_at">Tarih</th>
                                         <th>İşlem</th>
                                     </tr>
                                 </thead>
                                 <tbody id="videosTableBody"></tbody>
                             </table>
+
+                            <!-- Daha Fazla Yükle (visibility controlled by JS) -->
+                            <div id="loadMoreVideosWrap" style="text-align:center;margin-bottom:12px">
+                                <button type="button" id="loadMoreVideosBtn" class="btn btn-ghost" style="display:none">Daha Fazla Yükle</button>
+                            </div>
 
                             <!-- Main view toggle: right-aligned below table -->
                             <div id="mainViewToggle" class="main-view-toggle"
@@ -803,6 +867,50 @@
                                     <div>Detay</div>
                                 </div>
                                 <div class="table-body" id="monitoringAppLogsBody"></div>
+                            </div>
+                            <div class="videos-table" style="margin-bottom:16px">
+                                <div
+                                    style="padding:12px 16px;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);border-bottom:1px solid var(--border)">
+                                    İşlem (Processing) Detay Logları</div>
+                                <div class="table-header" style="grid-template-columns: 1fr 0.8fr 1fr 0.8fr 0.8fr 1fr 2fr">
+                                    <div>Tarih</div>
+                                    <div>Job ID</div>
+                                    <div>Worker</div>
+                                    <div>Olay</div>
+                                    <div>Sn</div>
+                                    <div>Hata Kodu</div>
+                                    <div>Hata Mesajı</div>
+                                </div>
+                                <div class="table-body" id="monitoringProcessingLogsBody"></div>
+                            </div>
+                            <div class="videos-table" style="margin-bottom:16px">
+                                <div
+                                    style="padding:12px 16px;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);border-bottom:1px solid var(--border)">
+                                    Depolama ve İmha (Storage Lifecycle) Logları</div>
+                                <div class="table-header" style="grid-template-columns: 1fr 0.7fr 1fr 1fr 1.5fr 2fr">
+                                    <div>Tarih</div>
+                                    <div>Job ID</div>
+                                    <div>Olay</div>
+                                    <div>Bucket</div>
+                                    <div>Boyut</div>
+                                    <div>Açıklama</div>
+                                </div>
+                                <div class="table-body" id="monitoringStorageLogsBody"></div>
+                            </div>
+                            <div class="videos-table" style="margin-bottom:16px">
+                                <div
+                                    style="padding:12px 16px;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);border-bottom:1px solid var(--border)">
+                                    Ajan ve Sistem Sağlığı (Heartbeat/Health)</div>
+                                <div class="table-header" style="grid-template-columns: 1fr 1.2fr 0.8fr 0.8fr 0.8fr 1fr 2fr">
+                                    <div>Tarih</div>
+                                    <div>Worker ID</div>
+                                    <div>Versiyon</div>
+                                    <div>Durum</div>
+                                    <div>Disk (MB)</div>
+                                    <div>RAM (%)</div>
+                                    <div>Detay</div>
+                                </div>
+                                <div class="table-body" id="monitoringAgentHealthLogsBody"></div>
                             </div>
                             <div class="videos-table" style="margin-bottom:16px">
                                 <div
@@ -1037,8 +1145,11 @@
                     <div id="urlHint" style="font-size:11.5px;color:var(--text-subtle);min-height:16px"></div>
                     <!-- Folder selection -->
                     <div style="display:flex;flex-direction:column;gap:5px">
-                        <label class="detail-label" for="urlFolder">Klasör <span
-                                style="font-weight:400;color:var(--text-subtle)">(opsiyonel)</span></label>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                            <label class="detail-label" for="urlFolder">Klasör <span
+                                    style="font-weight:400;color:var(--text-subtle)">(opsiyonel)</span></label>
+                            <a href="#" id="urlNewFolderLink" style="font-size:12px;text-decoration:underline;cursor:pointer;color:var(--primary);">Yeni klasör</a>
+                        </div>
                         <select id="urlFolder" class="filter-select" style="height:34px;width:100%">
                             <option value="">Klasör Seçin...</option>
                         </select>
@@ -1125,6 +1236,32 @@
                         </svg>
                         Oluştur
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Toplu Taşı -->
+        <div class="modal" id="bulkMoveModal" role="dialog" aria-modal="true" aria-labelledby="bulkMoveModalTitle"
+            aria-hidden="true">
+            <div class="modal-content" style="max-width:400px">
+                <div class="modal-header">
+                    <span class="modal-title" id="bulkMoveModalTitle">Toplu Taşı</span>
+                    <button class="modal-close" onclick="closeBulkMoveModal()" aria-label="Kapat">
+                        <svg width="16" height="16">
+                            <use href="#i-x" />
+                        </svg>
+                    </button>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:12px">
+                    <label class="detail-label" for="bulkMoveFolderSelect">Hedef klasör</label>
+                    <select id="bulkMoveFolderSelect" class="filter-select" style="height:36px;width:100%"
+                        aria-label="Klasör seçin">
+                        <option value="">Klasör seçin</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-ghost" onclick="closeBulkMoveModal()">İptal</button>
+                    <button class="btn btn-primary" id="bulkMoveConfirmBtn" onclick="confirmBulkMove()">Taşı</button>
                 </div>
             </div>
         </div>

@@ -4,7 +4,7 @@ BK-VF Hetner Agent v2 — Unified Python Agent (Ultra-HQ v4)
 4 parallel render, state machine, kademeli derin uyku (hibernasyon).
 
 Features:
-- 4 concurrent video render (ThreadPoolExecutor max_workers=4)
+- Real worker pool: ThreadPoolExecutor(max_workers=3), main loop never blocked by download/FFmpeg
 - Kademeli derin uyku: idle 3600s -> 2 cevapsız heartbeat 21600s -> 86400s
 - Active gear: wakeup/job triggers 300s window, claim every 60 seconds (never 1s)
 - Wakeup server 8080
@@ -12,6 +12,7 @@ Features:
 - Thumbnail: -ss 00:00:05, -vf scale=360:-2
 - Output suffix: -1080.mp4 / -720.mp4
 - SSRF protection on download URLs
+- Google Drive URL import: set GOOGLE_DRIVE_API_KEY in env for API-first download; gdown used as fallback
 """
 
 import os
@@ -32,14 +33,19 @@ import ipaddress
 from urllib.parse import urlparse, urljoin
 import re
 import signal
-from queue import Queue, Empty
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 try:
     import psutil
 except ImportError:
     psutil = None
+
+try:
+    import gdown
+except ImportError:
+    gdown = None
 
 from video_config import VIDEO_CONSTANTS
 
@@ -135,12 +141,17 @@ CONFIG = {
     'ffmpeg_path': os.getenv('FFMPEG_PATH', 'ffmpeg'),
     'temp_dir': os.getenv('TEMP_DIR', 'C:/temp/video-processing'),
 
-    # Parallel processing
-    'max_concurrent_jobs': int(os.getenv('MAX_CONCURRENT_JOBS', '4')),
+    # Parallel processing — real worker pool size (main loop dispatches, workers claim+process)
+    'worker_pool_size': int(os.getenv('WORKER_POOL_SIZE', '3')),
+    # Encode: kaç paralel FFmpeg (CPU yükü); 2 = daha düşük %100 vurma
+    'max_parallel_encode': int(os.getenv('MAX_PARALLEL_ENCODE', '4')),
+    # Her FFmpeg kaç thread kullansın (0 = sınırsız); 2 = 4 işlem × 2 = 8 çekirdek (12 çekirdekli CPU'da makul)
+    'ffmpeg_threads': int(os.getenv('FFMPEG_THREADS', '2')),
 
     # Polling kademeleri (saniye) — hiçbir koşulda 1 saniye yok
-    # 1. Active: /wakeup veya son 5 dk içinde iş → 60 sn
+    # 1. Active: /wakeup veya son 5 dk içinde iş; main loop wakes every active_loop_interval to drain/fill pool
     'active_wait': int(os.getenv('ACTIVE_WAIT', '60')),
+    'active_loop_interval': int(os.getenv('ACTIVE_LOOP_INTERVAL', '10')),
     'active_gear_duration': int(os.getenv('ACTIVE_GEAR_DURATION', '300')),
     # 2. Idle: 5 dk geçti → 3600 sn (1 saat)
     'idle_wait': int(os.getenv('IDLE_WAIT', '3600')),
@@ -212,8 +223,9 @@ class BKVFAgentV2:
         self.temp_dir = Path(CONFIG['temp_dir'])
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-        self.max_concurrent = self._compute_max_concurrent()
-        self.job_queue = Queue()
+        self.pool_size = CONFIG.get('worker_pool_size', 3)
+        self.executor = ThreadPoolExecutor(max_workers=self.pool_size)
+        self._active_futures = set()
         self.active_jobs = {}
         self.lock = threading.Lock()
         self.mode = 'idle'
@@ -224,7 +236,8 @@ class BKVFAgentV2:
         self.last_heartbeat = None
         self.running = True
         self.heartbeat_no_response_count = 0
-        self._url_download_semaphore = threading.Semaphore(1)  # Concurrency 1 for URL download
+        self._url_download_semaphore = threading.Semaphore(99)  # Paralel indirme sınırı yok (ağ hızında çeker)
+        self._encode_semaphore = threading.Semaphore(CONFIG['max_parallel_encode'])
         self._active_procs = {}  # {job_id: Popen} — FFmpeg handles for RAM watchdog kill
         self._ram_critical = False
         self._ram_critical_time = 0.0
@@ -233,7 +246,7 @@ class BKVFAgentV2:
 
         self._validate_config()
         self._cleanup_orphan_files()
-        logger.info(f"BK-VF Agent v2 initialized. Worker ID: {self.worker_id}, max_concurrent: {self.max_concurrent}")
+        logger.info(f"BK-VF Agent v2 initialized. Worker ID: {self.worker_id}, worker_pool_size: {self.pool_size}")
 
     def _cleanup_orphan_files(self) -> None:
         """Remove orphan .part, .mov, .mp4 files older than 1 hour from temp_dir (recursive)."""
@@ -272,29 +285,6 @@ class BKVFAgentV2:
         if removed:
             logger.info(f"Orphan cleanup: removed {removed} stale files from temp/")
 
-    def _compute_max_concurrent(self) -> int:
-        """Compute max_concurrent from CPU and RAM (FFmpeg ~4 GB per job)."""
-        env_val = os.getenv('MAX_CONCURRENT_JOBS', '').strip()
-        if env_val and env_val.isdigit():
-            return max(1, min(16, int(env_val)))
-        if not psutil:
-            return CONFIG['max_concurrent_jobs']
-        try:
-            health = get_system_health(self.temp_dir)
-            ram_available_gb = health.get('ram_available_gb') or health.get('ram_total_gb') or 0
-            cpu_count = psutil.cpu_count() or 4
-            # FFmpeg ~4 GB per job; leave 1 CPU for system
-            n = min(
-                max(1, cpu_count - 1),
-                max(1, int(ram_available_gb // 4)) if ram_available_gb > 0 else 1,
-                8,
-            )
-            logger.info(f"[DYNAMIC] CPU={cpu_count}, RAM={ram_available_gb:.1f}GB -> max_concurrent={n}")
-            return n
-        except Exception as e:
-            logger.warning(f"[DYNAMIC] Concurrency compute failed: {e}, using config default")
-            return CONFIG['max_concurrent_jobs']
-
     def _validate_config(self):
         if not self.bearer_token:
             logger.error("BK_BEARER_TOKEN not set")
@@ -310,6 +300,11 @@ class BKVFAgentV2:
         except Exception as e:
             logger.error(f"FFmpeg check failed: {e}")
             sys.exit(1)
+
+    def _notify_critical_api_error(self, method: str, endpoint: str, status_code: int) -> None:
+        """Log and send Telegram alert on 401/500 from Worker API (e.g. token invalid / server error)."""
+        logger.error(f"API {method} {endpoint}: critical status {status_code}")
+        self._send_telegram("Kritik Bağlantı Hatası: Token Geçersiz")
 
     def _make_api_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Optional[Dict]:
         url = f"{self.api_base_url}{endpoint}"
@@ -337,6 +332,9 @@ class BKVFAgentV2:
                     "Fix: Cloudflare/domain rule: exclude /api from redirect to bilgekarga.com.tr"
                 )
                 return None
+            if r.status_code in (401, 500):
+                self._notify_critical_api_error(method, endpoint, r.status_code)
+                return None
             if r.status_code == 204:
                 return None
             r.raise_for_status()
@@ -355,7 +353,10 @@ class BKVFAgentV2:
                     "Configure domain so /api/* goes to the Worker."
                 )
             else:
-                logger.error(f"API {method} {endpoint}: {e}")
+                if e.response is not None and e.response.status_code in (401, 500):
+                    self._notify_critical_api_error(method, endpoint, e.response.status_code)
+                else:
+                    logger.error(f"API {method} {endpoint}: {e}")
             return None
         except Exception as e:
             logger.error(f"API {method} {endpoint}: {e}")
@@ -376,6 +377,29 @@ class BKVFAgentV2:
             'ffmpeg_output': ffmpeg_output[:4000] if ffmpeg_output else '',
         }
         return self._make_api_request('POST', '/api/jobs/fail', data) is not None
+
+    def _cleanup_zombies(self, job_id: int) -> None:
+        """ZOM_01: Fiziksel olarak FFmpeg subprocess'ini öldür; işlem bittiğinde veya hata aldığında mutlaka çağrılmalı."""
+        proc = self._active_procs.pop(job_id, None)
+        if proc is None:
+            return
+        if proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                logger.info(f"[ZOM_01] SIGKILL → FFmpeg pid={proc.pid} job={job_id}")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"[ZOM_01] terminate failed job={job_id}: {e}")
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def _validate_download_url(self, url: str) -> bool:
         """SSRF shield: allow-list (known CDN/hosts only); block private/loopback, cloud metadata, IPv6.
@@ -447,6 +471,37 @@ class BKVFAgentV2:
         except Exception:
             return False
 
+    def _is_google_drive_file_url(self, url: str) -> bool:
+        """True if URL is a Google Drive single-file link (file or uc?export=download)."""
+        try:
+            u = urlparse(url)
+            if not u.hostname or 'drive.google.com' not in u.hostname.lower():
+                return False
+            if '/file/d/' in url or '/file/d/' in url.split('?')[0]:
+                return True
+            if 'export=download' in url and ('id=' in url or 'id=' in (u.query or '')):
+                return True
+            if 'uc?id=' in url or (u.path and 'uc' in u.path and 'id=' in (u.query or '')):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _extract_drive_file_id(self, url: str) -> Optional[str]:
+        """Extract Google Drive file ID from URL. Returns None if not found."""
+        try:
+            m = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+            if m:
+                return m.group(1)
+            u = urlparse(url)
+            if u.query:
+                for part in u.query.split('&'):
+                    if part.startswith('id='):
+                        return part[3:].strip()
+            return None
+        except Exception:
+            return None
+
     def _transform_url(self, url: str) -> str:
         """Google Drive confirm token, Dropbox ?dl=1."""
         u = urlparse(url)
@@ -495,15 +550,76 @@ class BKVFAgentV2:
         self._make_api_request('POST', '/api/jobs/status', data)
 
     def _download(self, url: str, dest: Path, job_id: int) -> bool:
-        """HEAD pre-check, disk quota 2x file size, 5GB limit, chunk 1MB, .part file, progress API."""
+        """HEAD pre-check, disk quota 2x file size, 5GB limit, chunk 1MB, .part file, progress API.
+        Google Drive: try Drive API first (if GOOGLE_DRIVE_API_KEY), then gdown fallback."""
         part_path = dest.parent / (dest.name + '.part')
+        max_bytes = CONFIG['max_url_download_bytes']
+        chunk_size = 1024 * 1024
         try:
             if not self._validate_download_url(url):
                 self.fail_job(job_id, "SSRF: blocked URL", stage='download')
                 return False
+
+            if self._is_google_drive_file_url(url):
+                file_id = self._extract_drive_file_id(url)
+                if not file_id:
+                    self.fail_job(job_id, "Geçersiz Google Drive URL", stage='download')
+                    return False
+                api_key = os.environ.get('GOOGLE_DRIVE_API_KEY')
+                if api_key:
+                    try:
+                        api_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&key={api_key}"
+                        self._update_job_status(job_id, 'DOWNLOADING')
+                        r = requests.get(api_url, stream=True, timeout=120)
+                        if r.status_code == 200:
+                            ct = (r.headers.get('Content-Type') or '').lower()
+                            if 'text/html' in ct:
+                                raise RuntimeError("Drive API returned HTML (quota or access)")
+                            total = int(r.headers.get('Content-Length', 0) or 0)
+                            if total and total > max_bytes:
+                                self.fail_job(job_id, "5 GB limit aşıldı", stage='download')
+                                return False
+                            downloaded = 0
+                            last_pct = -1
+                            with open(part_path, 'wb') as f:
+                                for chunk in r.iter_content(chunk_size=chunk_size):
+                                    if not chunk:
+                                        continue
+                                    downloaded += len(chunk)
+                                    if downloaded > max_bytes:
+                                        part_path.unlink(missing_ok=True)
+                                        self.fail_job(job_id, "5 GB limit aşıldı", stage='download')
+                                        return False
+                                    f.write(chunk)
+                                    pct = round((downloaded / total * 100) if total and total > 0 else 0, 1)
+                                    if pct != last_pct and (int(pct) % 10 == 0 or pct >= 99):
+                                        self._update_download_progress(job_id, downloaded, total)
+                                        last_pct = pct
+                            if part_path.exists() and part_path.stat().st_size > 0:
+                                part_path.rename(dest)
+                                return True
+                        else:
+                            raise RuntimeError(f"Drive API HTTP {r.status_code}")
+                    except Exception as e:
+                        logger.warning(f"Drive API download failed: {e}, trying gdown")
+                        part_path.unlink(missing_ok=True)
+
+                if gdown:
+                    try:
+                        self._update_job_status(job_id, 'DOWNLOADING')
+                        gdown.download(id=file_id, output=str(part_path), quiet=True)
+                        if part_path.exists() and part_path.stat().st_size > 0:
+                            part_path.rename(dest)
+                            return True
+                    except Exception as e:
+                        logger.warning(f"gdown fallback failed: {e}")
+                        part_path.unlink(missing_ok=True)
+
+                part_path.unlink(missing_ok=True)
+                self.fail_job(job_id, "Google Drive indirme başarısız (API ve gdown)", stage='download')
+                return False
+            # --- Generic URL (non–Drive) ---
             transformed = self._transform_url(url)
-            max_bytes = CONFIG['max_url_download_bytes']
-            chunk_size = 1024 * 1024
             content_length = None
             try:
                 head = requests.head(transformed, timeout=30, allow_redirects=True)
@@ -588,7 +704,8 @@ class BKVFAgentV2:
         """
         job_id = job['id']
         quality = job.get('quality', '720p')
-        profile = job.get('processing_profile', 'crf_14')
+        profile = job.get('processing_profile', '12')
+        crf_int = job.get('crf') if job.get('crf') is not None else (job.get('bk') or {}).get('crf')
         qmap = {'original': 'original', '720p': '720', '1080p': '1080', '2k': '2k', '4k': '4k'}
         res_suffix = qmap.get(quality, '1080' if quality == '1080p' else '720')
         base_clean = job['clean_name'].replace('.mp4', '').replace('.mov', '')
@@ -654,25 +771,31 @@ class BKVFAgentV2:
                 target_res = f"{meta['width']}x{meta['height']}"
 
             # Build FFmpeg cmd — no -b:v, -maxrate, -minrate, -bufsize, -r, -vsync (Bitrate/FPS: source preserved)
+            threads_opt = (['-threads', str(CONFIG['ffmpeg_threads'])] if CONFIG.get('ffmpeg_threads', 0) > 0 else [])
             if profile in ('web_opt', 'web_optimize'):
                 cmd = [
                     self.ffmpeg_path, '-i', str(input_path),
+                ] + threads_opt + [
                     '-c:v', 'copy', '-an', '-movflags', '+faststart',
                     '-y', str(output_file),
                 ]
             else:
-                # CRF from profile: crf_10 -> 10, crf_14 -> 14, etc.; legacy from ffmpeg_crf_map
-                if profile.startswith('crf_'):
+                # Priority: integer crf from D1 (6, 8, 10, 12, 14). Fallback: parse processing_profile or legacy map.
+                VALID_CRF = (6, 8, 10, 12, 14)
+                if crf_int is not None and int(crf_int) in VALID_CRF:
+                    crf = int(crf_int)
+                elif profile.startswith('crf_'):
                     try:
                         crf = int(profile.split('_')[1])
                     except (ValueError, IndexError):
-                        crf = 14
+                        crf = 12
                 else:
                     crf_map = CONFIG.get('ffmpeg_crf_map', {'native': 14, 'ultra': 16, 'dengeli': 14, 'kucuk_dosya': 18})
-                    crf = crf_map.get(profile, 14)
+                    crf = crf_map.get(profile, 12)
                 if scale_str:
                     cmd = [
                         self.ffmpeg_path, '-i', str(input_path),
+                    ] + threads_opt + [
                         '-vf', scale_str,
                         '-c:v', 'libx264', '-crf', str(crf), '-preset', 'slow', '-an',
                         '-movflags', '+faststart',
@@ -682,6 +805,7 @@ class BKVFAgentV2:
                 else:
                     cmd = [
                         self.ffmpeg_path, '-i', str(input_path),
+                    ] + threads_opt + [
                         '-c:v', 'libx264', '-crf', str(crf), '-preset', 'slow', '-an',
                         '-movflags', '+faststart',
                         '-profile:v', 'high', '-level', '4.1', '-pix_fmt', 'yuv420p',
@@ -690,26 +814,27 @@ class BKVFAgentV2:
             cmd_str = ' '.join(cmd)
             start = time.time()
             _popen_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
-            _ffmpeg_proc = subprocess.Popen(
-                _wrap_io_priority(cmd),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                creationflags=_popen_flags,
-            )
-            _apply_windows_priority(_ffmpeg_proc.pid)
-            self._active_procs[job_id] = _ffmpeg_proc
-            try:
-                _ffmpeg_stdout, _ffmpeg_stderr = _ffmpeg_proc.communicate(
-                    timeout=CONFIG['timeout_minutes'] * 60
+            with self._encode_semaphore:
+                _ffmpeg_proc = subprocess.Popen(
+                    _wrap_io_priority(cmd),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=_popen_flags,
                 )
-            except subprocess.TimeoutExpired:
-                _ffmpeg_proc.kill()
-                _ffmpeg_proc.wait()
-                self.fail_job(job_id, "FFmpeg timeout", stage='convert')
-                return None
-            finally:
-                self._active_procs.pop(job_id, None)
+                _apply_windows_priority(_ffmpeg_proc.pid)
+                self._active_procs[job_id] = _ffmpeg_proc
+                try:
+                    _ffmpeg_stdout, _ffmpeg_stderr = _ffmpeg_proc.communicate(
+                        timeout=CONFIG['timeout_minutes'] * 60
+                    )
+                except subprocess.TimeoutExpired:
+                    _ffmpeg_proc.kill()
+                    _ffmpeg_proc.wait()
+                    self.fail_job(job_id, "FFmpeg timeout", stage='convert')
+                    return None
+                finally:
+                    self._cleanup_zombies(job_id)
             elapsed = int(time.time() - start)
 
             if _ffmpeg_proc.returncode != 0:
@@ -795,6 +920,8 @@ class BKVFAgentV2:
         except Exception as e:
             self.fail_job(job_id, str(e), stage='convert')
             return None
+        finally:
+            self._cleanup_zombies(job_id)
 
     def _parse_fps(self, raw: str) -> float:
         try:
@@ -898,6 +1025,7 @@ class BKVFAgentV2:
             self.fail_job(job_id, str(e), stage='unknown')
             return False
         finally:
+            self._cleanup_zombies(job_id)
             with self.lock:
                 self.active_jobs.pop(job_id, None)
 
@@ -947,6 +1075,23 @@ class BKVFAgentV2:
             return r
         return None
 
+    def _claim_and_process_one(self) -> None:
+        """Single task for worker pool: claim one job from D1, then process it. Backend claim is atomic."""
+        job = self.claim_job()
+        if not job:
+            return
+        if not self._ensure_disk_space_for_job(job):
+            self.fail_job(
+                job['id'],
+                "Yetersiz disk alanı (en az 2× dosya boyutu gerekli)",
+                stage='claim'
+            )
+            return
+        with self.lock:
+            self.last_job_time = time.time()
+            self.active_gear_until = time.time() + CONFIG['active_gear_duration']
+        self._process_single_job(job)
+
     def send_heartbeat(self, status: str = 'ACTIVE') -> bool:
         with self.lock:
             active = len(self.active_jobs)
@@ -954,7 +1099,7 @@ class BKVFAgentV2:
             'status': status,
             'current_job_id': list(self.active_jobs.keys())[0] if self.active_jobs else None,
             'active_jobs': active,
-            'queue_size': self.job_queue.qsize(),
+            'queue_size': len(self._active_futures),
             'ip_address': self._get_ip(),
             'version': '2.0',
         }
@@ -1222,6 +1367,64 @@ class BKVFAgentV2:
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b'OK')
+                elif self.path == '/drive-list':
+                    if expected_token:
+                        auth = self.headers.get('Authorization', '').strip()
+                        if not auth.startswith('Bearer ') or auth[7:].strip() != expected_token:
+                            self.send_response(401)
+                            self.end_headers()
+                            self.wfile.write(b'Unauthorized')
+                            return
+                    cl = self.headers.get('Content-Length')
+                    body = b''
+                    if cl:
+                        try:
+                            body = self.rfile.read(int(cl))
+                        except (ValueError, OSError):
+                            pass
+                    folder_id = None
+                    try:
+                        if body:
+                            data = json.loads(body.decode('utf-8'))
+                            folder_id = (data.get('folder_id') or data.get('folderId') or '').strip()
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+                    if not folder_id:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'error': 'Missing folder_id'}).encode('utf-8'))
+                        return
+                    api_key = (os.environ.get('GOOGLE_DRIVE_API_KEY') or '').strip()
+                    if not api_key:
+                        self.send_response(503)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'error': 'GOOGLE_DRIVE_API_KEY not configured'}).encode('utf-8'))
+                        return
+                    try:
+                        q = f"'{folder_id}' in parents"
+                        url = f"https://www.googleapis.com/drive/v3/files?q={requests.utils.quote(q)}&key={api_key}&fields=files(id,name,mimeType)&pageSize=500"
+                        r = requests.get(url, timeout=30)
+                        if r.status_code != 200:
+                            self.send_response(502)
+                            self.send_header('Content-Type', 'application/json')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({'error': f'Drive API {r.status_code}', 'detail': r.text[:500]}).encode('utf-8'))
+                            return
+                        data = r.json()
+                        files = list(data.get('files') or [])
+                        video_files = [f for f in files if f.get('id') and f.get('name') and (f.get('mimeType') or '').startswith('video/')]
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'files': video_files}).encode('utf-8'))
+                    except Exception as e:
+                        logger.exception("Drive list failed: %s", e)
+                        self.send_response(502)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -1233,19 +1436,6 @@ class BKVFAgentV2:
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
         logger.info(f"Wakeup server on port {CONFIG['wakeup_port']}")
-
-    def _worker_loop(self, worker_id: int):
-        while self.running:
-            try:
-                job = self.job_queue.get(timeout=60)
-                if job is None:
-                    break
-                self._process_single_job(job)
-                self.job_queue.task_done()
-            except Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Worker {worker_id} error: {e}")
 
     def _telegram_c2_loop(self) -> None:
         """Background: long-poll Telegram getUpdates; handle /status, /pause, /resume. Only process messages from telegram_chat_id."""
@@ -1292,7 +1482,7 @@ class BKVFAgentV2:
                         health = get_system_health(self.temp_dir)
                         with self.lock:
                             active_ids = list(self.active_jobs.keys())
-                            queue_size = self.job_queue.qsize()
+                            queue_size = len(self._active_futures)
                         uptime_h = (time.time() - self._start_time) / 3600
                         paused_str = 'PAUSED' if self._paused else 'ACTIVE'
                         lines = [
@@ -1346,6 +1536,12 @@ class BKVFAgentV2:
 
     def run(self):
         logger.info("BK-VF Agent v2 starting (stealth idle + active gear)")
+        try:
+            r = self._make_api_request('POST', '/api/jobs/release-stale-startup', {'worker_id': self.worker_id})
+            if r and isinstance(r.get('released_count'), int) and r['released_count'] > 0:
+                logger.info(f"[Startup] Released {r['released_count']} stale job(s) for this worker")
+        except Exception as e:
+            logger.debug(f"[Startup] release-stale-startup skipped: {e}")
         self._samaritan_wakeup()
         self._start_wakeup_server()
         self._recover_interrupted_jobs()
@@ -1367,12 +1563,6 @@ class BKVFAgentV2:
             c2_t = threading.Thread(target=self._telegram_c2_loop, name="TelegramC2", daemon=True)
             c2_t.start()
 
-        workers = []
-        for i in range(self.max_concurrent):
-            t = threading.Thread(target=self._worker_loop, args=(i + 1,), name=f"Worker-{i+1}")
-            t.start()
-            workers.append(t)
-
         last_hb = 0
         try:
             while self.running:
@@ -1391,38 +1581,31 @@ class BKVFAgentV2:
                     mode = self.mode
                     gear_until = self.active_gear_until
 
-                if self._ram_critical and active == 0 and self.job_queue.empty():
+                if self._ram_critical and active == 0 and len(self._active_futures) == 0:
                     logger.info("[RAM] Graceful shutdown: no active jobs left, stopping.")
                     self.running = False
                     self.wakeup_event.set()
                     break
                 if mode == 'active' and now < gear_until:
-                    wait = CONFIG['active_wait']
+                    wait = CONFIG['active_loop_interval']
                     self.heartbeat_no_response_count = 0
                     if now - last_hb >= 30:
                         if self.send_heartbeat():
                             last_hb = now
-                    if (not self._ram_critical
-                            and not self._paused
-                            and active < self.max_concurrent
-                            and (now - self.last_claim_time) >= CONFIG['active_wait']):
+                    # Drain completed futures
+                    for f in list(self._active_futures):
+                        if f.done():
+                            self._active_futures.discard(f)
+                            try:
+                                f.result()
+                            except Exception as e:
+                                logger.error(f"[Pool] Worker task error: {e}")
+                    # Fill slots: submit claim+process until pool full
+                    if not self._ram_critical and not self._paused:
                         self._make_api_request('POST', '/api/jobs/mark-zombies', {})
-                        job = self.claim_job()
-                        with self.lock:
-                            self.last_claim_time = now
-                            if job:
-                                if not self._ensure_disk_space_for_job(job):
-                                    self.fail_job(
-                                        job['id'],
-                                        "Yetersiz disk alanı (en az 2× dosya boyutu gerekli)",
-                                        stage='claim'
-                                    )
-                                else:
-                                    self.job_queue.put(job)
-                                    self.last_job_time = now
-                                    self.active_gear_until = now + CONFIG['active_gear_duration']
-                            elif now >= self.active_gear_until:
-                                self.mode = 'idle'
+                        while len(self._active_futures) < self.pool_size:
+                            future = self.executor.submit(self._claim_and_process_one)
+                            self._active_futures.add(future)
                 elif self.heartbeat_no_response_count >= 3:
                     wait = CONFIG['deep2_wait']
                     if now - last_hb >= CONFIG['idle_heartbeat_interval']:
@@ -1466,10 +1649,7 @@ class BKVFAgentV2:
             pass
         finally:
             self.running = False
-            for _ in workers:
-                self.job_queue.put(None)
-            for t in workers:
-                t.join(timeout=5)
+            self.executor.shutdown(wait=True)
             logger.info("BK-VF Agent v2 stopped")
 
 

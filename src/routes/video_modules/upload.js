@@ -38,7 +38,7 @@ export async function routeGeneratePresignedUrl(request, svc, env) {
     if (invalid.length) throw new ValidationError('Invalid upload parameters', invalid);
 
     const result = await svc.generatePresignedUrl({
-        fileName, fileSize, quality: resolvedQuality, processingProfile: processingProfile || 'crf_14',
+        fileName, fileSize, quality: resolvedQuality, processingProfile: processingProfile || '12',
         tags, projectName, notes, displayName: displayName || null, folderId
     }, userId);
 
@@ -88,6 +88,33 @@ export async function routeDirectUpload(request, svc, token, env) {
         }
         throw e;
     }
+}
+
+export async function routeMultipartUpload(request, svc, env, ctx) {
+    const auth = await requireAuth(request, env);
+    const userId = auth.user;
+
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0] || 'unknown';
+    const limit = CONFIG.RATE_LIMITS.VIDEO_PRESIGNED_PER_MINUTE ?? 30;
+    const allowed = await checkRateLimit(env, `video:multipart:${ip}`, limit, 60);
+    if (!allowed) throw new RateLimitError('Too many upload requests. Please try again later.', 60);
+
+    const result = await svc.handleMultipartUpload(request, userId);
+    notifyAgentWakeup(env, ctx);
+
+    if (env.DB) {
+        try {
+            const secLog = new SecurityLogRepository(env.DB);
+            await secLog.insert({
+                ip, action: 'VIDEO_MULTIPART_UPLOAD', status: 'success',
+                userAgent: request.headers.get('User-Agent') || 'unknown',
+                country: request.cf?.country || 'XX', city: request.cf?.city || 'Unknown',
+                details: { jobId: result.job_id, cleanName: result.clean_name, folder_id: result.folder_id, userId },
+            });
+        } catch (e) { logger.error('VIDEO_MULTIPART_UPLOAD log', { message: e?.message }); }
+    }
+
+    return jsonResponse(result);
 }
 
 export async function routeUploadComplete(request, svc, url, env, ctx) {

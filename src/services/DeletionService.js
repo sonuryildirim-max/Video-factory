@@ -6,6 +6,7 @@
 import { ValidationError, NotFoundError, AuthError, ConflictError, BK_ERROR_CODES } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import { SecurityLogRepository } from '../repositories/SecurityLogRepository.js';
+import { StorageLifecycleLogRepository } from '../repositories/StorageLifecycleLogRepository.js';
 import { JOB_STATUS, PROCESSING_STATUSES } from '../config/BK_CONSTANTS.js';
 
 export class DeletionService {
@@ -170,6 +171,16 @@ export class DeletionService {
             } catch (e) {
                 logger.warn('MOVED_TO_TRASH log failed', { message: e?.message });
             }
+            try {
+                const storageLog = new StorageLifecycleLogRepository(env.DB);
+                await storageLog.insert({
+                    jobId,
+                    eventType: 'moved_to_deleted',
+                    bucket: 'deleted',
+                    reason: 'Soft delete: moved to deleted bucket',
+                    details: { keys: moveLabels },
+                });
+            } catch (e) { logger.warn('StorageLifecycleLog insert (deleteJob)', { message: e?.message }); }
         }
     }
 
@@ -205,6 +216,15 @@ const isSoftDeleted = job.deleted_at != null && job.status === JOB_STATUS.DELETE
         if (rawBucket && keysToDeleteRaw.length) await this._deleteR2Keys(rawBucket, keysToDeleteRaw);
         if (pubBucket && keysToDeletePublic.length) await this._deleteR2Keys(pubBucket, keysToDeletePublic);
         if (delBucket && keysToDeleteDeleted.length) await this._deleteR2Keys(delBucket, keysToDeleteDeleted);
+        const db = env?.DB || this.env?.DB;
+        if (db) {
+            try {
+                const storageLog = new StorageLifecycleLogRepository(db);
+                if (keysToDeleteRaw.length) await storageLog.insert({ jobId, eventType: 'r2_delete', bucket: 'raw', reason: 'Permanent delete', details: { key_count: keysToDeleteRaw.length, keys: keysToDeleteRaw } });
+                if (keysToDeletePublic.length) await storageLog.insert({ jobId, eventType: 'r2_delete', bucket: 'public', reason: 'Permanent delete', details: { key_count: keysToDeletePublic.length, keys: keysToDeletePublic } });
+                if (keysToDeleteDeleted.length) await storageLog.insert({ jobId, eventType: 'r2_delete', bucket: 'deleted', reason: 'Permanent delete', details: { key_count: keysToDeleteDeleted.length, keys: keysToDeleteDeleted } });
+            } catch (e) { logger.warn('StorageLifecycleLog insert (permanentDelete)', { message: e?.message }); }
+        }
         const deleted = await this.jobRepo.forceHardDeleteJob(jobId);
         if (deleted) logger.info('Permanent delete (idam) job', { jobId, userId });
         if (!deleted) throw new ConflictError('Job could not be deleted from database');

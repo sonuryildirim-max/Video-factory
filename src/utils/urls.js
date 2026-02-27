@@ -21,6 +21,19 @@ export function buildRawDownloadUrl(r2RawKey, env) {
 }
 
 /**
+ * PLAY_01: public_url başında protokol yoksa https:// ekler (MEDIA_ELEMENT_ERROR önlemi).
+ * @param {string} url - Tam URL veya path (örn. cdn.bilgekarga.tr/videos/x.mp4)
+ * @returns {string} https:// ile başlayan URL veya boş string
+ */
+export function normalizePublicUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const s = url.trim();
+    if (!s) return '';
+    if (s.startsWith('https://') || s.startsWith('http://')) return s;
+    return 'https://' + s.replace(/^\/+/, '');
+}
+
+/**
  * Build CDN public URL for processed video or thumbnail.
  * @param {string} keyOrPath - R2 key (e.g. videos/2026/123_video.mp4) or full path
  * @param {string} cdnBase - CDN base URL (default https://cdn.bilgekarga.tr)
