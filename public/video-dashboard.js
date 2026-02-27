@@ -9,8 +9,8 @@ const CONFIG = {
 
 // #region agent log
 function _dbg(payload) {
-    var p = { location: payload.location || 'video-dashboard.js', message: payload.message, data: payload.data || {}, timestamp: Date.now(), runId: payload.runId, hypothesisId: payload.hypothesisId };
-    fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }).catch(function () {});
+    var p = { sessionId: '2595de', location: payload.location || 'video-dashboard.js', message: payload.message, data: payload.data || {}, timestamp: Date.now(), runId: payload.runId, hypothesisId: payload.hypothesisId };
+    fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2595de' }, body: JSON.stringify(p) }).catch(function () { });
 }
 // #endregion
 
@@ -657,7 +657,7 @@ async function submitMultiUpload() {
         formData.append('file', file);
         formData.append('folder_id', selectedFolderId);
         // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a294b5'},body:JSON.stringify({sessionId:'a294b5',location:'video-dashboard.js:submitMultiUpload',message:'multi-upload per file',data:{index:i,fileName:file.name,selectedFolderId,hasFolder:!!selectedFolderId},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'a294b5' }, body: JSON.stringify({ sessionId: 'a294b5', location: 'video-dashboard.js:submitMultiUpload', message: 'multi-upload per file', data: { index: i, fileName: file.name, selectedFolderId, hasFolder: !!selectedFolderId }, timestamp: Date.now(), hypothesisId: 'A' }) }).catch(() => { });
         // #endregion
 
         try {
@@ -830,6 +830,194 @@ function setupGlobalListeners() {
             startSystemAlertsPoll();
         }
     });
+
+    // ─── THUMBNAIL LIGHTBOX (Fullscreen on Click) ───────────────────────
+    (function initThumbLightbox() {
+        var _activeThumb = null;
+        var _overlay = null;
+
+        function getOrCreateOverlay() {
+            if (_overlay) return _overlay;
+            _overlay = document.createElement('div');
+            _overlay.id = 'thumbLightboxOverlay';
+            _overlay.className = 'thumb-lightbox';
+            _overlay.setAttribute('role', 'dialog');
+            _overlay.setAttribute('aria-modal', 'true');
+            _overlay.setAttribute('aria-label', 'Küçük resim büyütülmüş');
+            _overlay.innerHTML =
+                '<div class="thumb-lightbox-backdrop"></div>' +
+                '<div class="thumb-lightbox-content">' +
+                '  <span class="thumb-lightbox-loading" aria-live="polite">Yükleniyor…</span>' +
+                '  <img class="thumb-lightbox-img" alt="Video küçük resmi" />' +
+                '  <button type="button" class="thumb-lightbox-close" aria-label="Kapat">&times;</button>' +
+                '</div>';
+
+            var img = _overlay.querySelector('.thumb-lightbox-img');
+            var loadingEl = _overlay.querySelector('.thumb-lightbox-loading');
+            img.addEventListener('load', function () { if (loadingEl) loadingEl.classList.add('hidden'); });
+            img.addEventListener('error', function () { if (loadingEl) loadingEl.classList.add('hidden'); });
+
+            _overlay.querySelector('.thumb-lightbox-backdrop').addEventListener('click', closeLightbox);
+            _overlay.querySelector('.thumb-lightbox-close').addEventListener('click', closeLightbox);
+            _overlay.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeLightbox(); });
+            _overlay.querySelector('.thumb-lightbox-content').addEventListener('click', function (e) {
+                var tag = e.target.tagName;
+                if (tag === 'IMG' || tag === 'BUTTON') return;
+                closeLightbox();
+            });
+
+            document.body.appendChild(_overlay);
+            return _overlay;
+        }
+
+        function openLightbox(url, triggerEl) {
+            var ov = getOrCreateOverlay();
+            var img = ov.querySelector('.thumb-lightbox-img');
+            var loadingEl = ov.querySelector('.thumb-lightbox-loading');
+            if (img) {
+                if (loadingEl) loadingEl.classList.remove('hidden');
+                img.src = url;
+                img.style.maxWidth = '90vw';
+                img.style.maxHeight = '90vh';
+                img.style.objectFit = 'contain';
+            }
+            ov.classList.add('show');
+            document.body.style.overflow = 'hidden';
+            ov.querySelector('.thumb-lightbox-close').focus();
+            _activeThumb = triggerEl;
+        }
+
+        function closeLightbox() {
+            if (!_overlay) return;
+            _overlay.classList.remove('show');
+            var img = _overlay.querySelector('.thumb-lightbox-img');
+            if (img) img.removeAttribute('src');
+            var loadingEl = _overlay.querySelector('.thumb-lightbox-loading');
+            if (loadingEl) loadingEl.classList.remove('hidden');
+            document.body.style.overflow = '';
+            if (_activeThumb && document.contains(_activeThumb)) {
+                _activeThumb.focus({ preventScroll: true });
+            }
+            _activeThumb = null;
+        }
+
+        // CLICK → anında aç, sabit kal
+        document.addEventListener('click', function (e) {
+            var thumb = e.target.closest('.video-thumb[data-thumb-url]');
+            if (!thumb) return;
+            e.preventDefault();
+            e.stopPropagation();
+            openLightbox(thumb.getAttribute('data-thumb-url'), thumb);
+        }, true); // capture phase
+
+        // Global erişim için (closeAllModals vs.)
+        window._bkThumbLightbox = { close: closeLightbox, open: openLightbox };
+    })();
+
+    // ─── FLOATING HOVER PREVIEW (Follows Cursor) ─────────────────────────
+    (function initHoverPreview() {
+        var _previewEl = null;
+        var _currentThumb = null;
+        var _hoverTimer = null;
+
+        function getOrCreatePreview() {
+            if (_previewEl) return _previewEl;
+            _previewEl = document.createElement('div');
+            _previewEl.className = 'hover-preview-tooltip';
+            _previewEl.innerHTML = '<span class="thumb-lightbox-loading hidden">Yükleniyor…</span><img src="" alt="Önizleme" />';
+            document.body.appendChild(_previewEl);
+            return _previewEl;
+        }
+
+        function showPreview(url, clientX, clientY) {
+            var el = getOrCreatePreview();
+            var img = el.querySelector('img');
+            var loading = el.querySelector('span');
+
+            if (img.getAttribute('src') !== url) {
+                loading.classList.remove('hidden');
+                img.style.display = 'none';
+                img.onload = function () {
+                    loading.classList.add('hidden');
+                    img.style.display = 'block';
+                };
+                img.onerror = function () {
+                    loading.classList.add('hidden');
+                };
+                img.src = url;
+            }
+
+            positionPreview(clientX, clientY);
+            el.classList.add('show');
+        }
+
+        function positionPreview(clientX, clientY) {
+            if (!_previewEl || !_previewEl.classList.contains('show')) return;
+
+            // X offset 15px right of cursor
+            var x = clientX + 15;
+            // Y offset 15px below cursor
+            var y = clientY + 15;
+
+            // Simple collision detection
+            var estWidth = 400; // Expected max width
+            var estHeight = 250; // Expected max height
+
+            if (x + estWidth > window.innerWidth) {
+                x = clientX - estWidth - 15;
+                if (x < 0) x = 10;
+            }
+            if (y + estHeight > window.innerHeight) {
+                y = clientY - estHeight - 15;
+                if (y < 0) y = 10;
+            }
+
+            _previewEl.style.left = x + 'px';
+            _previewEl.style.top = y + 'px';
+        }
+
+        function hidePreview() {
+            if (_previewEl) {
+                _previewEl.classList.remove('show');
+            }
+        }
+
+        document.addEventListener('mouseover', function (e) {
+            var thumb = e.target.closest('.video-thumb[data-thumb-url]');
+            if (!thumb) return;
+            _currentThumb = thumb;
+            var url = thumb.getAttribute('data-thumb-url');
+            if (!url) return;
+
+            if (_hoverTimer) clearTimeout(_hoverTimer);
+            // Küçük bir gecikme ekliyoruz ki fare hızlıca gezerken anlık popup'lar fırlamasın
+            _hoverTimer = setTimeout(function () {
+                // Sadece hala aynı thumb üzerindeysek aç
+                if (_currentThumb === thumb) {
+                    showPreview(url, e.clientX, e.clientY);
+                }
+            }, 100);
+        });
+
+        document.addEventListener('mousemove', function (e) {
+            if (_currentThumb && _previewEl && _previewEl.classList.contains('show')) {
+                positionPreview(e.clientX, e.clientY);
+            }
+        });
+
+        document.addEventListener('mouseout', function (e) {
+            var thumb = e.target.closest('.video-thumb[data-thumb-url]');
+            if (!thumb) return;
+            // Thumb içinde hareket etmeye devam ediyorsa kapatma
+            if (thumb.contains(e.relatedTarget)) return;
+
+            if (_hoverTimer) clearTimeout(_hoverTimer);
+            if (_currentThumb === thumb) {
+                _currentThumb = null;
+                hidePreview();
+            }
+        });
+    })();
 
     // Çoklu yükle: dosya seçilince Yükle butonunu aktif et
     const multiInput = document.getElementById('multiUploadFileInput');
@@ -1610,15 +1798,15 @@ function getNormalizedNameWithResolution(video) {
 function getPresetLabel(video) {
     const crfNum = video.bk?.crf ?? video.crf;
     if (crfNum != null && [6, 8, 10, 12, 14].includes(Number(crfNum))) {
-        const labels = { 6: 'Native (6)', 8: 'Ultra Kalite (8)', 10: 'Dengeli (10)', 12: 'Standart (12)', 14: 'Küçük (14)' };
+        const labels = { 6: 'Native (CRF 6)', 8: 'Ultra Kalite (CRF 8)', 10: 'Dengeli (CRF 10)', 12: 'Standart (CRF 12)', 14: 'Küçük (CRF 14)' };
         return labels[Number(crfNum)] || '—';
     }
     const p = (video.bk && video.bk.processing_profile) || video.processing_profile || '';
     if (p === 'web_opt' || p === 'web_optimize') return 'Sadece Web Optimize (Kalite/FPS Değişmez)';
     const map = {
-        crf_10: 'Native (6)', crf_12: 'Ultra Kalite (8)', crf_14: 'Dengeli (10)', crf_16: 'Standart (12)', crf_18: 'Küçük (14)',
-        '6': 'Native (6)', '8': 'Ultra Kalite (8)', '10': 'Dengeli (10)', '12': 'Standart (12)', '14': 'Küçük (14)',
-        native: 'Native (6)', ultra: 'Ultra Kalite (8)', dengeli: 'Dengeli (10)', kucuk_dosya: 'Küçük (14)', web_optimize: 'Sadece Web Optimize (Kalite/FPS Değişmez)',
+        crf_10: 'Native (CRF 6)', crf_12: 'Ultra Kalite (CRF 8)', crf_14: 'Dengeli (CRF 10)', crf_16: 'Standart (CRF 12)', crf_18: 'Küçük (CRF 14)',
+        '6': 'Native (CRF 6)', '8': 'Ultra Kalite (CRF 8)', '10': 'Dengeli (CRF 10)', '12': 'Standart (CRF 12)', '14': 'Küçük (CRF 14)',
+        native: 'Native (CRF 6)', ultra: 'Ultra Kalite (CRF 8)', dengeli: 'Dengeli (CRF 10)', kucuk_dosya: 'Küçük (CRF 14)', web_optimize: 'Sadece Web Optimize (Kalite/FPS Değişmez)',
     };
     return map[p] || p || '—';
 }
@@ -1645,6 +1833,9 @@ function createVideoRow(video) {
     const thumbHtml = thumbUrl
         ? `<img src="${escapeHtml(thumbUrl)}" alt="" loading="lazy">`
         : IC.film;
+    const thumbAttrs = thumbUrl
+        ? ` data-thumb-url="${escapeHtml(thumbUrl)}" role="button" tabindex="0" title="Küçük resmi büyüt"`
+        : '';
 
     const inputMB = (video.file_size_input ?? video.file_size ?? 0) / 1_048_576;
     const outputMB = (video.file_size_output ?? video.bk?.file_size_output ?? 0) / 1_048_576;
@@ -1677,7 +1868,7 @@ function createVideoRow(video) {
 
     row.innerHTML = `
         ${checkboxCell}
-        <td data-label="Thumbnail"><div class="video-thumb" aria-hidden="true">${thumbHtml}</div></td>
+        <td data-label="Thumbnail"><div class="video-thumb"${thumbAttrs} aria-hidden="true">${thumbHtml}</div></td>
         <td data-label="Video" class="cell-video">
             <div style="display: flex; flex-direction: column; line-height: 1.2;">
                 <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalName)}">${escapeHtml(originalName)}</strong>
@@ -2275,6 +2466,7 @@ function renderDeletedTable() {
         const kazançDisplay = (fsIn && fsOut) ? Math.round((1 - fsOut / fsIn) * 100) + '%' : '—';
         const thumbUrl = v.thumbnail_url ?? (v.bk?.thumbnail_key ? `${thumbCdn}/${v.bk.thumbnail_key}` : null);
         const thumbHtml = thumbUrl ? `<img src="${escapeHtml(thumbUrl)}" alt="" loading="lazy">` : IC.film;
+        const thumbAttrs = thumbUrl ? ` data-thumb-url="${escapeHtml(thumbUrl)}" role="button" tabindex="0" title="Küçük resmi büyüt"` : '';
         const checked = AppState.selectedDeletedIds.has(String(v.id));
         const safeId = escapeHtml(String(v.id));
         const originalNameDel = (v.original_name || v.bk?.original_name || '').trim() || '—';
@@ -2282,7 +2474,7 @@ function renderDeletedTable() {
         const presetLabelDel = getPresetLabel(v);
         return `<tr data-video-id="${safeId}">
                 <td><input type="checkbox" class="row-checkbox-deleted" data-video-id="${safeId}" ${checked ? 'checked' : ''} aria-label="Seç" onclick="toggleDeletedSelection('${safeId}')"></td>
-                <td><div class="video-thumb" aria-hidden="true">${thumbHtml}</div></td>
+                <td><div class="video-thumb"${thumbAttrs} aria-hidden="true">${thumbHtml}</div></td>
                 <td class="cell-video">
                     <div style="display: flex; flex-direction: column; line-height: 1.2;">
                         <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalNameDel)}">${escapeHtml(originalNameDel)}</strong>
@@ -2676,6 +2868,7 @@ function openModal(id) {
 
 function closeAllModals() {
     destroyActivePlayer();
+    closeThumbLightbox();
     const playerContainer = document.getElementById('bkPlayerContainer');
     if (playerContainer) {
         playerContainer.style.display = 'none';
@@ -2691,6 +2884,14 @@ function closeAllModals() {
 
 function closeModal() { closeAllModals(); }
 function closeStatsModal() { closeAllModals(); }
+
+// ── Thumbnail Lightbox v2: compat shims for closeAllModals etc. ─────────────
+function openThumbLightbox(url, el) {
+    if (window._bkThumbLightbox) window._bkThumbLightbox.open(url, el);
+}
+function closeThumbLightbox() {
+    if (window._bkThumbLightbox) window._bkThumbLightbox.close();
+}
 
 function viewErrorDetail(videoId) {
     const video = AppState.videos.find(v => v.id == videoId);

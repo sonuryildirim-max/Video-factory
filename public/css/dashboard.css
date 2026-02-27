@@ -713,24 +713,29 @@ table.videos-table {
 .r2-storage-widget {
     max-width: 560px;
 }
+
 .r2-storage-cards {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin-bottom: 8px;
 }
+
 .r2-storage-card {
     min-width: 0;
 }
+
 .r2-storage-card .btn-nuke-widget {
     font-size: 12px;
     padding: 6px 12px;
 }
+
 .r2-storage-note {
     font-size: 11px;
     color: var(--text-subtle);
     margin-bottom: 8px;
 }
+
 .r2-storage-actions {
     display: flex;
     align-items: center;
@@ -879,13 +884,16 @@ table.videos-table {
 /* 1. TABLO ANA İSKELETİ - ASLA KAYMAZ */
 table {
     width: 100% !important;
-    table-layout: fixed !important; /* BÜTÜN SIR BURADA: İçeriğe göre uzamasını/kaymasını engeller */
+    table-layout: fixed !important;
+    /* BÜTÜN SIR BURADA: İçeriğe göre uzamasını/kaymasını engeller */
     border-collapse: collapse !important;
 }
 
 /* 2. DİKEY HİZALAMA VE ÇİZGİLER */
-th, td {
-    vertical-align: middle !important; /* Başlıklar ve butonlar milimetrik aynı hizada olur */
+th,
+td {
+    vertical-align: middle !important;
+    /* Başlıklar ve butonlar milimetrik aynı hizada olur */
     padding: 12px 8px !important;
     border-bottom: 1px solid #e2e8f0 !important;
 }
@@ -893,35 +901,46 @@ th, td {
 /* 3. SÜTUN GENİŞLİKLERİNİ ÇİVİLEME (Kendi tablona göre nth-child sırasını uydur) */
 
 /* Checkbox Sütunu (1. Sütun) */
-th:nth-child(1), td:nth-child(1) {
+th:nth-child(1),
+td:nth-child(1) {
     width: 40px !important;
     text-align: center !important;
 }
 
 /* Thumbnail/Resim Sütunu (2. Sütun) */
-th:nth-child(2), td:nth-child(2) {
+th:nth-child(2),
+td:nth-child(2) {
     width: 90px !important;
     text-align: center !important;
 }
 
 /* Video Adı Sütunu (3. Sütun) - En çok kaydıran pezevenk budur! */
-th:nth-child(3), td:nth-child(3) {
-    width: auto !important; /* Kalan tüm boşluğu alır */
-    white-space: nowrap !important; /* Alt satıra inmesini yasaklar */
-    overflow: hidden !important; /* Dışarı taşanı keser */
-    text-overflow: ellipsis !important; /* Uzunsa sonuna ... koyar */
-    max-width: 0 !important; /* Table-layout fixed ile mucize yaratır, asla sağdaki sütunları itmez */
+th:nth-child(3),
+td:nth-child(3) {
+    width: auto !important;
+    /* Kalan tüm boşluğu alır */
+    white-space: nowrap !important;
+    /* Alt satıra inmesini yasaklar */
+    overflow: hidden !important;
+    /* Dışarı taşanı keser */
+    text-overflow: ellipsis !important;
+    /* Uzunsa sonuna ... koyar */
+    max-width: 0 !important;
+    /* Table-layout fixed ile mucize yaratır, asla sağdaki sütunları itmez */
 }
 
 /* Boyut, İzlenme veya Durum Sütunları (Aradaki diğer sütunlar) */
-th:nth-child(4), td:nth-child(4),
-th:nth-child(5), td:nth-child(5) {
+th:nth-child(4),
+td:nth-child(4),
+th:nth-child(5),
+td:nth-child(5) {
     width: 100px !important;
     text-align: center !important;
 }
 
 /* Aksiyon Butonları (Son Sütun) - Asla sıkışmamalı */
-th:last-child, td:last-child {
+th:last-child,
+td:last-child {
     width: 180px !important;
     text-align: right !important;
     white-space: nowrap !important;
@@ -1243,10 +1262,15 @@ table.videos-table td[colspan="11"] {
     overflow: hidden;
 }
 
+.video-thumb[data-thumb-url] {
+    cursor: pointer;
+}
+
 .video-thumb:hover {
-    overflow: visible;
     position: relative;
     z-index: 20;
+    border-color: var(--border-strong);
+    box-shadow: 0 4px 12px var(--shadow);
 }
 
 .video-thumb img {
@@ -1254,14 +1278,125 @@ table.videos-table td[colspan="11"] {
     height: 100%;
     object-fit: cover;
     aspect-ratio: 16/9;
-    border-radius: 6px;
+    /* remove inner border-radius so container handles clip */
     display: block;
     transition: transform 0.2s ease;
 }
 
 .video-thumb:hover img {
-    transform: scale(2);
+    transform: scale(1.05);
     transform-origin: center;
+}
+
+/* Thumbnail lightbox — image at natural size (no pixelation) */
+.thumb-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    visibility: hidden;
+    opacity: 0;
+    transition: visibility 0.2s, opacity 0.2s;
+}
+
+.thumb-lightbox.show {
+    visibility: visible;
+    opacity: 1;
+}
+
+.thumb-lightbox-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    cursor: pointer;
+}
+
+.thumb-lightbox-content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 90vw;
+    max-height: 90vh;
+    padding: 2rem;
+}
+
+.thumb-lightbox-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.thumb-lightbox-loading.hidden {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.thumb-lightbox-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.thumb-lightbox-close {
+    position: absolute;
+    top: -0.5rem;
+    right: -0.5rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: none;
+    border-radius: 50%;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.thumb-lightbox-close:hover {
+    background: var(--text-subtle);
+    color: var(--bg);
+}
+
+/* Floating Hover Preview Tooltip (follows cursor) */
+.hover-preview-tooltip {
+    position: fixed;
+    z-index: 10001;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    background: var(--bg);
+    padding: 4px;
+    border: 1px solid var(--border);
+}
+
+.hover-preview-tooltip.show {
+    visibility: visible;
+    opacity: 1;
+}
+
+.hover-preview-tooltip img {
+    max-width: 400px;
+    max-height: 400px;
+    display: block;
+    border-radius: 4px;
+    object-fit: contain;
 }
 
 .video-info {
@@ -1525,6 +1660,12 @@ table.videos-table td[colspan="11"] {
     aspect-ratio: 9/16;
     object-fit: cover;
     border-radius: 6px;
+    transition: transform 0.2s ease;
+}
+
+.top-viewed-item:hover img {
+    transform: scale(1.05);
+    transform-origin: center;
 }
 
 .top-viewed-item .top-viewed-name {
