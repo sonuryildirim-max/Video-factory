@@ -136,6 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         queueSummaryText: document.getElementById('queueSummaryText'),
         concurrentInput: document.getElementById('concurrentInput'),
         processingProfile: document.getElementById('processingProfile'),
+        processingModeDesc: document.getElementById('processingModeDesc'),
         presetResolutionSection: document.getElementById('presetResolutionSection'),
         folderSelect: document.getElementById('folderId'),
     };
@@ -160,11 +161,29 @@ async function loadFolders() {
 }
 
 const VALID_PROCESSING_PROFILES = ['6', '8', '10', '12', '14', 'web_opt'];
+
+/** Açıklama metinleri: İşleme Modu dropdown altında seçime göre gösterilir. */
+const PROCESSING_MODE_DESCRIPTIONS = {
+    '6': 'En yüksek kalite · Neredeyse kaynak kalitesi · Arşiv / master kopya',
+    '8': 'Çok yüksek kalite · Stüdyo yayını / reklam · Büyük dosya',
+    '10': 'Yüksek kalite · E-ticaret ürün videoları için önerilen · İyi kalite/boyut dengesi',
+    '12': 'Kalite/boyut dengesi · Daha küçük dosya · Hızlı yükleme',
+    '14': 'Küçük dosya · Mobil / yavaş bağlantı · Hızlı önizleme',
+    'web_opt': 'Sadece codec/container · Kalite ve FPS aynı · Web paylaşımı için hazırla'
+};
+
+function updateProcessingModeDesc() {
+    const value = els.processingProfile?.value || '10';
+    const text = PROCESSING_MODE_DESCRIPTIONS[value] || PROCESSING_MODE_DESCRIPTIONS['10'];
+    if (els.processingModeDesc) els.processingModeDesc.textContent = text;
+}
+
 function restoreUploadPreferences() {
     const raw = localStorage.getItem('bk_upload_processing_profile') || 'crf_14';
-    const profile = VALID_PROCESSING_PROFILES.includes(raw) ? raw : '12';
+    const profile = VALID_PROCESSING_PROFILES.includes(raw) ? raw : '10';
     const quality = localStorage.getItem('bk_upload_quality') || '720p';
     if (els.processingProfile) els.processingProfile.value = profile;
+    updateProcessingModeDesc();
     UploadState.selectedPreset = quality;
     els.presetBtns?.forEach(b => {
         if (b.dataset.preset === quality) {
@@ -278,9 +297,10 @@ function setupListeners() {
     });
 
     els.processingProfile?.addEventListener('change', () => {
-        const profile = els.processingProfile?.value || '12';
+        const profile = els.processingProfile?.value || '10';
         localStorage.setItem('bk_upload_processing_profile', profile);
         updatePresetVisibility();
+        updateProcessingModeDesc();
     });
 }
 
