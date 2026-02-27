@@ -693,21 +693,9 @@
                                 <tbody id="videosTableBody"></tbody>
                             </table>
 
-                            <!-- Daha Fazla Yükle (visibility controlled by JS) -->
-                            <div id="loadMoreVideosWrap" style="text-align:center;margin-bottom:12px">
-                                <button type="button" id="loadMoreVideosBtn" class="btn btn-ghost" style="display:none">Daha Fazla Yükle</button>
-                            </div>
-
                             <!-- Main view toggle: right-aligned below table -->
                             <div id="mainViewToggle" class="main-view-toggle"
                                 style="display:flex;justify-content:flex-end;margin-bottom:12px"></div>
-
-                            <!-- Infinite scroll sentinel (Intersection Observer target) -->
-                            <div id="infiniteScrollSentinel" aria-hidden="true"
-                                style="height:1px;visibility:hidden;pointer-events:none"></div>
-                            <div id="infiniteScrollEndMessage" hidden
-                                style="text-align:center;padding:16px;color:var(--text-subtle);font-size:13px"
-                                aria-live="polite"></div>
 
                             <!-- Pagination -->
                             <div class="pagination" id="pagination"></div>

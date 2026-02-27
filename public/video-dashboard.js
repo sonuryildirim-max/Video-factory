@@ -304,11 +304,9 @@ function initDomRefs() {
     Els.navDeleted = document.getElementById('navDeleted');
     Els.panelDeleted = document.getElementById('panelDeleted');
     Els.pagination = document.getElementById('pagination');
-    Els.infiniteScrollSentinel = document.getElementById('infiniteScrollSentinel');
     Els.bulkRetryBtn = document.getElementById('bulkRetryBtn');
     Els.headerCheckbox = document.getElementById('headerCheckbox');
     Els.pageSize = document.getElementById('pageSize');
-    Els.loadMoreVideosBtn = document.getElementById('loadMoreVideosBtn');
 }
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
@@ -645,7 +643,6 @@ async function submitMultiUpload() {
         showNotification('Lütfen en az bir dosya seçin.', 'warning');
         return;
     }
-    const folderId = (document.getElementById('multiUploadFolderId') && document.getElementById('multiUploadFolderId').value) || '';
     const files = Array.from(input.files);
     if (btn) { btn.disabled = true; }
     if (statusEl) statusEl.textContent = `${files.length} dosya yükleniyor…`;
@@ -654,9 +651,14 @@ async function submitMultiUpload() {
     let err = 0;
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        const sel = document.getElementById('multiUploadFolderId');
+        const selectedFolderId = (sel && sel.value) ? String(sel.value) : '';
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('folder_id', folderId);
+        formData.append('folder_id', selectedFolderId);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/6e5419c3-da58-4eff-91a7-eca90285816f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a294b5'},body:JSON.stringify({sessionId:'a294b5',location:'video-dashboard.js:submitMultiUpload',message:'multi-upload per file',data:{index:i,fileName:file.name,selectedFolderId,hasFolder:!!selectedFolderId},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
 
         try {
             const res = await fetch(`${CONFIG.API_BASE || ''}/api/upload`, {
@@ -775,8 +777,6 @@ async function createFolderFromUrlModal() {
 document.addEventListener('DOMContentLoaded', async () => {
     initDomRefs();
     setupGlobalListeners();
-    setupInfiniteScroll();
-    window.addEventListener('pagehide', teardownInfiniteScroll);
     updateThemeIcons();
     applySidebarCollapsed();
 
@@ -1167,15 +1167,7 @@ function setupViewListeners() {
     if (Els.pageSize) {
         EventManager.add(Els.pageSize, 'change', () => {
             AppState.currentPage = 1;
-            loadVideos(false);
-        });
-    }
-
-    // Daha Fazla Yükle: sonraki sayfayı ekle
-    if (Els.loadMoreVideosBtn) {
-        EventManager.add(Els.loadMoreVideosBtn, 'click', () => {
-            if (AppState.isLoadingVideos) return;
-            loadVideos(true);
+            loadVideos();
         });
     }
 
@@ -1465,24 +1457,17 @@ function setTrendEl(el, numericValue, label) {
 }
 
 // ─── VIDEOS ───────────────────────────────────────────────────────────────────
-/** @param {boolean} [append=false] - If true, fetch next page and append; otherwise replace. Parametre almıyorsa bile URL'deki ?folder=id kullanılır. */
-async function loadVideos(append = false) {
+/** Fetches the current page of videos and replaces the table (no append). Uses AppState.currentPage; callers set it (e.g. goToPage, filter change). */
+async function loadVideos() {
     if (AppState.isLoadingVideos) return;
-    if (!append) {
-        AppState.videos = [];
-        AppState.currentPage = 1;
-    }
-    const pageToFetch = append ? AppState.currentPage + 1 : (AppState.currentPage || 1);
-    if (append && pageToFetch > AppState.totalPages) return;
+    const pageToFetch = AppState.currentPage || 1;
     AppState.isLoadingVideos = true;
-    renderLoadMoreButton();
-    if (!append) renderTableSkeleton();
+    renderTableSkeleton();
 
     try {
         let data;
         if (CONFIG.USE_MOCK) {
             await delay(400);
-            AppState.currentPage = pageToFetch;
             data = generateMockVideos();
         } else {
             const currentLimit = Els.pageSize ? Math.min(100, Math.max(1, parseInt(Els.pageSize.value, 10) || CONFIG.PAGE_SIZE)) : CONFIG.PAGE_SIZE;
@@ -1509,55 +1494,18 @@ async function loadVideos(append = false) {
         const normalized = CONFIG.USE_MOCK ? data : fromVideoListDTO(data);
         const newVideos = normalized.videos || [];
         AppState.totalPages = normalized.totalPages ?? 1;
+        AppState.currentPage = pageToFetch;
         AppState.videosError = null;
-
-        if (append) {
-            AppState.currentPage = pageToFetch;
-            AppState.videos.push(...newVideos);
-            const MAX_VIDEOS_IN_MEMORY = 300;
-            if (AppState.videos.length > MAX_VIDEOS_IN_MEMORY) {
-                AppState.videos = AppState.videos.slice(-MAX_VIDEOS_IN_MEMORY);
-                renderVideosTable();
-            } else {
-                appendVideoRows(newVideos);
-            }
-        } else {
-            AppState.videos = newVideos;
-            renderVideosTable();
-        }
+        AppState.videos = newVideos;
+        renderVideosTable();
         renderPagination();
         renderMainViewToggle();
-        renderInfiniteScrollEndMessage();
-        renderLoadMoreButton();
     } catch (error) {
         AppState.videosError = error.message;
-        if (!append) renderTableError(error.message);
-        else showNotification('Sonraki sayfa yüklenemedi: ' + error.message, 'error');
+        renderTableError(error.message);
     } finally {
         AppState.isLoadingVideos = false;
-        renderLoadMoreButton();
     }
-}
-
-/** Show/hide and enable/disable "Daha Fazla Yükle" based on currentPage, totalPages, isMainView, isLoadingVideos. */
-function renderLoadMoreButton() {
-    const btn = Els.loadMoreVideosBtn;
-    if (!btn) return;
-    const hasMore = (AppState.currentPage || 1) < (AppState.totalPages || 1);
-    const show = hasMore && !AppState.isMainView;
-    btn.style.display = show ? '' : 'none';
-    btn.disabled = !!AppState.isLoadingVideos;
-    btn.textContent = AppState.isLoadingVideos ? 'Yükleniyor...' : 'Daha Fazla Yükle';
-}
-
-/** Append rows for additional videos to the table body. */
-function appendVideoRows(videos) {
-    const body = getTableBody();
-    if (!body || !videos.length) return;
-    const fragment = document.createDocumentFragment();
-    videos.forEach(video => fragment.appendChild(createVideoRow(video)));
-    body.appendChild(fragment);
-    updateBulkActionUI();
 }
 
 // ─── TABLE RENDERING ──────────────────────────────────────────────────────────
@@ -1732,7 +1680,7 @@ function createVideoRow(video) {
         <td data-label="Thumbnail"><div class="video-thumb" aria-hidden="true">${thumbHtml}</div></td>
         <td data-label="Video" class="cell-video">
             <div style="display: flex; flex-direction: column; line-height: 1.2;">
-                <strong style="font-weight: 600; color: #111827;">${escapeHtml(originalName)}</strong>
+                <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalName)}">${escapeHtml(originalName)}</strong>
                 <span style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(r2RawKey)}</span>
             </div>
         </td>
@@ -1801,41 +1749,6 @@ function renderMainViewToggle() {
     }
 }
 
-// ─── INFINITE SCROLL ─────────────────────────────────────────────────────────
-let _infiniteScrollObserver = null;
-
-function teardownInfiniteScroll() {
-    if (_infiniteScrollObserver) {
-        _infiniteScrollObserver.disconnect();
-        _infiniteScrollObserver = null;
-    }
-}
-
-function setupInfiniteScroll() {
-    const sentinel = Els.infiniteScrollSentinel;
-    if (!sentinel) return;
-    teardownInfiniteScroll();
-    _infiniteScrollObserver = new IntersectionObserver(
-        (entries) => {
-            const entry = entries[0];
-            if (!entry?.isIntersecting) return;
-            if (AppState.isLoadingVideos) return;
-            if (AppState.currentPage >= AppState.totalPages) return;
-            loadVideos(true);
-        },
-        { root: null, rootMargin: '200px 0px', threshold: 0 }
-    );
-    _infiniteScrollObserver.observe(sentinel);
-}
-
-function renderInfiniteScrollEndMessage() {
-    const el = document.getElementById('infiniteScrollEndMessage');
-    if (!el) return;
-    const atEnd = AppState.videos.length > 0 && AppState.currentPage >= AppState.totalPages && AppState.totalPages > 0;
-    el.hidden = !atEnd;
-    el.textContent = atEnd ? 'Daha Fazla Video Yok' : '';
-}
-
 // ─── PAGINATION ───────────────────────────────────────────────────────────────
 function renderPagination() {
     if (!Els.pagination) return;
@@ -1900,7 +1813,6 @@ function switchTab(tab) {
         Els.panelVideos?.removeAttribute('hidden');
         AppState.selectedDeletedIds.clear();
         updateBulkDeletedUI();
-        setupInfiniteScroll();
     } else if (tab === 'monitoring') {
         Els.panelMonitoring?.removeAttribute('hidden');
         loadMonitoringData();
@@ -1913,7 +1825,6 @@ function switchTab(tab) {
         Els.panelUsers?.removeAttribute('hidden');
         loadUsers();
     }
-    if (tab !== 'videos') teardownInfiniteScroll();
     if (typeof closeNavDrawer === 'function') closeNavDrawer();
 }
 
@@ -2374,7 +2285,7 @@ function renderDeletedTable() {
                 <td><div class="video-thumb" aria-hidden="true">${thumbHtml}</div></td>
                 <td class="cell-video">
                     <div style="display: flex; flex-direction: column; line-height: 1.2;">
-                        <strong style="font-weight: 600; color: #111827;">${escapeHtml(originalNameDel)}</strong>
+                        <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalNameDel)}">${escapeHtml(originalNameDel)}</strong>
                         <span style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(r2RawKeyDel)}</span>
                     </div>
                 </td>
