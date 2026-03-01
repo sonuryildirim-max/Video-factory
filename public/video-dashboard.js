@@ -1824,6 +1824,10 @@ function createVideoRow(video) {
         : '—';
     const originalName = (video.original_name || video.bk?.original_name || '').trim() || '—';
     const r2RawKey = (video.bk?.r2_raw_key || video.r2_raw_key || '').trim() || '—';
+    const showRawInList = !['completed', 'failed'].includes(video.status);
+    const listRawLabel = showRawInList && r2RawKey !== '—' && r2RawKey !== 'url-import-pending'
+        ? 'Ham: ' + r2RawKey
+        : '';
     const safeId = escapeHtml(video.id);
 
     const thumbSrc = video.thumbnail_url || (video.bk && video.bk.thumbnail_url) || null;
@@ -1872,7 +1876,7 @@ function createVideoRow(video) {
         <td data-label="Video" class="cell-video">
             <div style="display: flex; flex-direction: column; line-height: 1.2;">
                 <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalName)}">${escapeHtml(originalName)}</strong>
-                <span style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(r2RawKey)}</span>
+                <span style="font-size: 11px; color: #6b7280; margin-top: 2px;">${listRawLabel ? escapeHtml(listRawLabel) : ''}</span>
             </div>
         </td>
         <td data-label="İzlenme">${escapeHtml(viewCount)}</td>
@@ -2470,7 +2474,6 @@ function renderDeletedTable() {
         const checked = AppState.selectedDeletedIds.has(String(v.id));
         const safeId = escapeHtml(String(v.id));
         const originalNameDel = (v.original_name || v.bk?.original_name || '').trim() || '—';
-        const r2RawKeyDel = (v.bk?.r2_raw_key || v.r2_raw_key || '').trim() || '—';
         const presetLabelDel = getPresetLabel(v);
         return `<tr data-video-id="${safeId}">
                 <td><input type="checkbox" class="row-checkbox-deleted" data-video-id="${safeId}" ${checked ? 'checked' : ''} aria-label="Seç" onclick="toggleDeletedSelection('${safeId}')"></td>
@@ -2478,7 +2481,7 @@ function renderDeletedTable() {
                 <td class="cell-video">
                     <div style="display: flex; flex-direction: column; line-height: 1.2;">
                         <strong style="font-weight: 600; color: #111827;" title="${escapeHtml(originalNameDel)}">${escapeHtml(originalNameDel)}</strong>
-                        <span style="font-size: 11px; color: #6b7280; margin-top: 2px;">${escapeHtml(r2RawKeyDel)}</span>
+                        <span style="font-size: 11px; color: #6b7280; margin-top: 2px;"></span>
                     </div>
                 </td>
                 <td>${escapeHtml(viewCount)}</td>
@@ -2950,6 +2953,14 @@ async function viewVideoDetails(videoId) {
         ${detailItem('Yükleyen', escapeHtml(video.uploaded_by))}
         ${detailItem('Yükleme Tarihi', uploadDate)}
         ${detailItem('İşlem Tamamlanma', processDate)}
+        ${(function () {
+            const rawKey = (video.bk?.r2_raw_key || video.r2_raw_key || '').trim();
+            let rawValue = !rawKey || rawKey === 'url-import-pending' ? '—' : escapeHtml(rawKey);
+            if (rawKey && rawKey !== 'url-import-pending' && video.status === 'completed') {
+                rawValue += ' <span style="color: #6b7280; font-size: 0.9em;">(İşlendikten sonra raw dosyası silindi)</span>';
+            }
+            return detailItem('İlk yükleme (raw)', rawValue);
+        })()}
         ${detailItem('Etiketler', escapeHtml(video.tags) || '—')}
         ${detailItem('Proje Adı', escapeHtml(video.project_name) || '—')}
         ${(function () {
